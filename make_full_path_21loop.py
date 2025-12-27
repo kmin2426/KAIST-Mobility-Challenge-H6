@@ -1,6 +1,5 @@
 import os
 
-# 네가 원하는 21->...->21 루프
 NODES = [21, 51, 46, 40, 63, 34, 27, 31, 1, 3, 7, 9, 56, 59, 18, 21]
 
 WAYPOINT_DIR = os.path.join(os.path.dirname(__file__), "waypoint")
