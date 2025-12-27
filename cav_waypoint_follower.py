@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
@@ -8,16 +9,33 @@ from geometry_msgs.msg import Accel, PoseStamped
 # =========================
 # 설정(초보자 튜닝 포인트)
 # =========================
-WP_CSV = "full_path_21loop.csv"  # 방금 만든 전체 경로
-TARGET_V = 0.20                 # 속도 (너무 빠르면 흔들림)
-LOOKAHEAD = 0.25                # 주시거리(빙글빙글이면 0.5~0.8로 올려)
-STEER_GAIN = 1.6                # 조향 민감도
-MAX_STEER = 1.0                 # 조향 제한
-WINDOW = 150                    # idx 주변 탐색 범위(점프 방지)
+WP_CSV = "full_path_21loop.csv"   # (중요) tool 폴더에 있는 파일명과 똑같이
+TARGET_V = 0.4               # 속도(m/s). 빠르면 흔들림↑
+LOOKAHEAD = 0.15                 # 주시거리(m). 빙글빙글이면 0.6~0.9로 ↑
+MAX_STEER = 1.0             # 조향 제한(rad). 너무 작으면 코너 못돎
 
+WINDOW = 100                     # idx 주변 탐색 범위(점프 방지)
+TIMER_DT = 0.05                   # 20Hz (바꾸면 PID 튜닝도 같이 바꿔야함)
+
+# =========================
+# PID 조향 파라미터 (핵심)
+# =========================
+# ⭐ 추천 시작값 (빙글빙글/진동 줄이기)
+Kp = 1.6
+Ki = 0.0       # 처음엔 0으로 시작하세요. (I 넣으면 회전/폭주 가능)
+Kd = 0.20
+
+I_CLAMP = 0.40     # 적분 폭주 방지 (0.2~0.6)
+D_LPF = 0.7       # 미분 필터 (0~1). 클수록 부드러움. 0.7~0.9 추천
+
+# =========================
+# 유틸 함수
+# =========================
 def wrap_pi(a):
-    while a > math.pi: a -= 2*math.pi
-    while a < -math.pi: a += 2*math.pi
+    while a > math.pi:
+        a -= 2 * math.pi
+    while a < -math.pi:
+        a += 2 * math.pi
     return a
 
 def yaw_from_quat(q):
@@ -44,6 +62,9 @@ def load_waypoints(csv_path):
         raise RuntimeError("waypoints too short")
     return pts
 
+# =========================
+# 메인 노드
+# =========================
 class WaypointFollower(Node):
     def __init__(self, wp_file):
         super().__init__("cav_waypoint_follower")
@@ -65,12 +86,18 @@ class WaypointFollower(Node):
         self.yaw = None
         self.pose_ok = False
 
-        # "진행 인덱스" (빙글빙글 방지 핵심)
+        # 진행 인덱스 (빙글빙글 방지 핵심)
         self.idx = 0
         self.idx_initialized = False
 
-        self.timer = self.create_timer(0.05, self.on_timer)  # 20Hz
-        self.get_logger().info(f"Loaded {self.n} waypoints from: {wp_file}")
+        # PID 상태 변수
+        self.err_i = 0.0
+        self.err_prev = 0.0
+        self.d_filt = 0.0
+        self.dt = TIMER_DT
+
+        self.timer = self.create_timer(self.dt, self.on_timer)  # 20Hz
+        self.get_logger().info(f"[OK] Loaded {self.n} waypoints from: {wp_file}")
 
     def on_pose(self, msg: PoseStamped):
         self.pose_ok = True
@@ -91,9 +118,16 @@ class WaypointFollower(Node):
                     best_i = i
             self.idx = best_i
             self.idx_initialized = True
-            self.get_logger().info(f"Initialized idx={self.idx}")
+
+            # PID 초기화도 여기서 같이 (갑자기 튀는 것 방지)
+            self.err_i = 0.0
+            self.err_prev = 0.0
+            self.d_filt = 0.0
+
+            self.get_logger().info(f"[OK] Initialized idx={self.idx}")
 
     def nearest_in_window(self):
+        # idx부터 앞으로 WINDOW 범위에서만 가장 가까운 점 찾기 (뒤로 점프 방지)
         start = self.idx
         end = min(self.idx + WINDOW, self.n)
 
@@ -130,22 +164,56 @@ class WaypointFollower(Node):
         target_i = self.find_lookahead(self.idx)
         tx, ty = self.wps[target_i]
 
-        # 헤딩 오차
+        # 목표 방향
         target_ang = math.atan2(ty - self.y, tx - self.x)
-        err = wrap_pi(target_ang - self.yaw)
+        err = wrap_pi(target_ang - self.yaw)  # heading error
 
-        steer = STEER_GAIN * err
+        # =========================
+        # PID 조향 제어 (핵심)
+        # =========================
+        p = Kp * err
+
+        # I (적분 + anti-windup)
+        self.err_i += err * self.dt
+        if self.err_i > I_CLAMP:
+            self.err_i = I_CLAMP
+        elif self.err_i < -I_CLAMP:
+            self.err_i = -I_CLAMP
+        i = Ki * self.err_i
+
+        # D (미분 + 저역통과필터)
+        d_raw = (err - self.err_prev) / self.dt
+        self.d_filt = D_LPF * self.d_filt + (1.0 - D_LPF) * d_raw
+        d = Kd * self.d_filt
+        self.err_prev = err
+
+        steer = p + i + d
         steer = max(-MAX_STEER, min(MAX_STEER, steer))
 
+        # publish
         cmd = Accel()
         cmd.linear.x = TARGET_V
         cmd.angular.z = steer
         self.pub.publish(cmd)
 
+        # 2초마다 상태 로그
+        now_sec = self.get_clock().now().seconds_nanoseconds()[0]
+        if now_sec % 2 == 0:
+            self.get_logger().info(
+                f"idx={self.idx}/{self.n}  near={near_dist:.2f}m  err={err:.2f}rad  steer={steer:.2f}"
+            )
+
 def main():
     rclpy.init()
-    # tool 폴더 기준 파일 경로
+
+    # tool 폴더 기준 파일 경로 (이 파일이 tool 폴더에 있다고 가정)
     wp_path = os.path.join(os.path.dirname(__file__), WP_CSV)
+
+    if not os.path.exists(wp_path):
+        print(f"[ERROR] waypoint csv not found: {wp_path}")
+        print("       WP_CSV 이름/위치(tool 폴더) 확인하세요.")
+        return
+
     node = WaypointFollower(wp_path)
     try:
         rclpy.spin(node)
