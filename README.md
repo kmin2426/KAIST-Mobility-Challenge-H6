@@ -55,3 +55,12 @@ This project is developed as a **team-based competition entry**.
 - This repository follows a structured Git workflow  
   (feature branches → dev → main).
 - Build artifacts and logs are excluded via `.gitignore`.
+
+---
+## files
+- check_path.py : 길 체크하는 python 파일
+- make_spline.py : 길 생성하는 python 파일
+- path_shifted.py : 전체 경로 평행이동 시켜주는 python 파일
+- path_new.json : 대회 파일에 없는 csv 파일까지 포함하는 전체 경로
+- path_shifted.json : 전체 경로 0.25m x축 평행이동한 경로
+- pure_pursuit_pid.py : 제어기 파일
