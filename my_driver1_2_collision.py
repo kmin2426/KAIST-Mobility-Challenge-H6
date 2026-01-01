@@ -9,9 +9,7 @@ import sys
 from geometry_msgs.msg import Accel, PoseStamped
 from std_msgs.msg import Int32
 
-# ===============================================================
-# [1] 설정 영역
-# ===============================================================
+
 target_vehicle_id = 1 
 if len(sys.argv) > 1:
     try: target_vehicle_id = int(sys.argv[1])
@@ -23,30 +21,28 @@ if target_vehicle_id == 1:
     MY_PATH_FILE = 'converted_path1_1.json'
     MY_TOPIC = '/CAV_01'
     OTHER_TOPIC = '/CAV_02'
-    print(f"\n🔵 [차량 1] Priority Mode (Steering Boosted)")
+    print(f"\n [차량 1] ready")
 elif target_vehicle_id == 2:
     MY_PATH_FILE = 'converted_path1_2.json'
     MY_TOPIC = '/CAV_02'
     OTHER_TOPIC = '/CAV_01'
-    print(f"\n🔴 [차량 2] Priority Mode (Steering Boosted)")
+    print(f"\n [차량 2] ready")
 else:
     MY_PATH_FILE = 'converted_path2.json'
     MY_TOPIC = '/CAV_01'
     OTHER_TOPIC = '/CAV_02'
 
-# ===============================================================
-# [2] 튜닝 파라미터 
-# ===============================================================
+
 SAFETY_DISTANCE = 0.5
 ZONE_TOLERANCE = 0.2
 
-TARGET_VELOCITY = 0.38
+TARGET_VELOCITY = 0.48
 LOOK_AHEAD_DISTANCE = 0.23  
 
 # PID 및 보정 게인
-Kp = 4.0      
+Kp = 4.5      
 Ki = 0.05
-Kd = 1.5      
+Kd = 2.3      
 K_cte = 5.0  
 
 class PriorityRotaryDriver(Node):
@@ -89,7 +85,7 @@ class PriorityRotaryDriver(Node):
                 data = json.load(f)
                 self.path_x = data.get('X') or data.get('x') or []
                 self.path_y = data.get('Y') or data.get('y') or []
-        else: self.get_logger().error(f"❌ 경로 파일 없음")
+        else: self.get_logger().error(f" 경로 파일 없음")
 
     def load_danger_zone(self):
         if os.path.exists(DANGER_ZONE_CSV):
@@ -124,7 +120,7 @@ class PriorityRotaryDriver(Node):
     def drive_callback(self):
         if not self.is_pose_received or len(self.path_x) == 0: return
 
-        # 1. 가장 가까운 경로점(CTE 계산용)
+        # 1. 가장 가까운 경로점 (CTE 계산용)
         min_dist = float('inf')
         current_idx = 0
         for i in range(len(self.path_x)):
@@ -133,9 +129,9 @@ class PriorityRotaryDriver(Node):
                 min_dist = dist
                 current_idx = i
 
-        # 2. 우선권 로직 (멈춤/출발 결정)
+        # 2. 우선권 로직
         final_velocity = TARGET_VELOCITY
-        status_msg = "🟢 주행"
+        status_msg = "주행"
 
         if self.other_car_x is not None:
             dist_to_other = math.hypot(self.current_x - self.other_car_x, self.current_y - self.other_car_y)
@@ -146,7 +142,7 @@ class PriorityRotaryDriver(Node):
                 final_velocity = TARGET_VELOCITY # 내가 우선
             elif is_other_in_zone and (dist_to_other <= SAFETY_DISTANCE):
                 final_velocity = 0.0 # 양보
-                status_msg = "⛔ 양보 정지"
+                status_msg = "양보"
 
         # 3. Look Ahead Point 찾기
         target_idx = current_idx
@@ -158,7 +154,7 @@ class PriorityRotaryDriver(Node):
         tx = self.path_x[target_idx]
         ty = self.path_y[target_idx]
 
-        # 4. 조향각 계산 (Steering Logic 강화됨)
+        # 4. 조향각 계산 
         desired_yaw = math.atan2(ty - self.current_y, tx - self.current_x)
         yaw_err = desired_yaw - self.current_yaw
         
@@ -174,9 +170,7 @@ class PriorityRotaryDriver(Node):
         i_term = Ki * self.integral_error
         d_term = Kd * (yaw_err - self.prev_error) / self.dt 
         
-        # 💡 [핵심 수정] 거리 오차(CTE) 보정 강화
         # 경로가 내 진행방향 기준 왼쪽에 있는지 오른쪽에 있는지 판단하여 보정 방향 결정
-        # 간단한 휴리스틱: yaw_err와 부호를 맞춤 (타겟이 왼쪽에 있으면 왼쪽으로 더 꺾어라)
         cte_correction = min_dist * K_cte  
         if yaw_err < 0: 
             cte_correction = -cte_correction 
