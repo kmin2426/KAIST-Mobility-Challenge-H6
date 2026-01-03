@@ -9,7 +9,7 @@ import os
 
 
 # 파라미터 설정 
-PATH_FILENAME = "path.py"
+PATH_FILENAME = "path1_1.py"
 LOOKAHEAD_DIST = 0.3   
 MAX_SPEED = 1.2        
 MIN_SPEED = 0.3        
@@ -169,4 +169,5 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
 
