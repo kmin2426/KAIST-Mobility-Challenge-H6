@@ -36,10 +36,9 @@ Controller (controller.py)
 ---
 
 ## How to Run
-
+```bash
 ### Terminal 1 — Decision FSM
 
-```bash
 source /opt/ros/foxy/setup.bash
 source ~/Mobility_Challenge_Simulator/install/setup.bash
 export ROS_DOMAIN_ID=100
@@ -50,7 +49,6 @@ python3 decision_fsm.py
 
 ### Terminal 2 — Controller
 
-```bash
 source /opt/ros/foxy/setup.bash
 source ~/Mobility_Challenge_Simulator/install/setup.bash
 export ROS_DOMAIN_ID=100
