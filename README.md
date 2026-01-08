@@ -37,3 +37,24 @@ This project is built on the official KAIST Mobility Challenge Simulator.
 ## Notes
 - Structured Git workflow (feature → dev → main)
 - Build artifacts and logs excluded via `.gitignore`
+
+---
+
+## Folder Structure
+```text
+├── README.md
+├── etc
+│   ├── check_path.py
+│   ├── csv_to_json.py
+│   ├── make_spline.py
+│   ├── path_generator.py
+│   ├── path_shifted.py
+│   └── waypoint
+├── project_structure.txt
+├── task1-1
+│   ├── path
+│   └── pure_pursuit_pid.py
+└── task2
+    ├── path
+    └── task_2_legend.py
+```
