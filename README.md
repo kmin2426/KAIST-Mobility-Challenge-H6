@@ -1,64 +1,39 @@
-# KAIST Mobility Challenge — CAV Control & Simulation
+# KAIST Mobility Challenge — CAV Control
 
-This repository contains our team’s implementation for the  
-**KAIST Mobility Challenge**,  
-a competition focused on **connected and autonomous vehicle (CAV) control**
-in a multi-agent simulation environment.
-
-The project is developed using **ROS 2** and targets robust vehicle control
-under realistic traffic and interaction scenarios.
+This repository contains our team’s solution for the **KAIST Mobility Challenge**,
+focusing on **connected and autonomous vehicle (CAV) control** in a multi-agent
+ROS 2 simulation environment.
 
 ---
 
-## Competition Overview
-- **Event**: KAIST Mobility Challenge
-- **Focus**: Cooperative and autonomous vehicle control
-- **Platform**: ROS 2–based simulator
-- **Scenario**: Multi-vehicle interaction in a shared environment
-
-The objective is to design and implement control algorithms that enable
-stable, safe, and efficient autonomous driving behavior in complex scenarios.
+## Overview
+- **Event**: KAIST Mobility Challenge  
+- **Platform**: ROS 2–based multi-vehicle simulator  
+- **Focus**: Trajectory tracking and motion control for CAVs  
 
 ---
 
-## Simulator Platform
-This project is built on top of the official KAIST Mobility Challenge Simulator.
+## Simulator
+This project is built on the official KAIST Mobility Challenge Simulator.
 
 [![Simulator Repository](https://img.shields.io/badge/GitHub-Mobility_Challenge_Simulator-black?logo=github)](https://github.com/cislab-kaist/Mobility_Challenge_Simulator)
 
 ---
 
-## Project Overview
-Our team focuses on **trajectory tracking and motion control** for autonomous vehicles
-within the provided simulation framework.
-
-The system:
-- Subscribes to vehicle state and waypoint information
-- Computes control commands based on reference trajectories
-- Publishes acceleration and steering commands in real time
-- Is designed to be modular and easily extensible
+## What We Implement
+- Vehicle state subscription and trajectory following
+- Real-time acceleration and steering control
+- Modular control logic for extensibility
 
 ---
 
-## System Architecture
-- **ROS 2 Nodes**
-  - State subscription (pose, velocity)
-  - Control computation
-  - Command publishing
-- **Control Logic**
-  - Reference trajectory following
-  - Smooth acceleration control
-- **Simulation Interface**
-  - Direct integration with the KAIST Mobility Challenge simulator
-
----
-
-## Team & Contribution
-This project is developed as a **team-based competition entry**.
+## Architecture
+- **ROS 2 Nodes**: state → control → command
+- **Control**: reference trajectory tracking
+- **Interface**: direct simulator integration
 
 ---
 
 ## Notes
-- This repository follows a structured Git workflow  
-  (feature branches → dev → main).
-- Build artifacts and logs are excluded via `.gitignore`.
+- Structured Git workflow (feature → dev → main)
+- Build artifacts and logs excluded via `.gitignore`
