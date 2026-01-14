@@ -8,6 +8,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from geometry_msgs.msg import Accel, PoseStamped
+from std_msgs.msg import Float32  # [ADD] hv.py gate speed
 
 from control import MapPredictionDriver
 
@@ -17,10 +18,10 @@ from control import MapPredictionDriver
 # ============================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PATH_CONFIG = {
-    1: "/home/dongminkim/Desktop/Mobility_Challenge_Simulator/src/central_control/task3/path/path3_1.json",
-    2: "/home/dongminkim/Desktop/Mobility_Challenge_Simulator/src/central_control/task3/path/path3_2.json",
-    3: "/home/dongminkim/Desktop/Mobility_Challenge_Simulator/src/central_control/task3/path/path3_3.json",
-    4: "/home/dongminkim/Desktop/Mobility_Challenge_Simulator/src/central_control/task3/path/path3_4.json",
+    1: "/home/dongminkim/Desktop/KAIST-Mobility-Challenge-H6/task3/path/path3_1.json",
+    2: "/home/dongminkim/Desktop/KAIST-Mobility-Challenge-H6/task3/path/path3_2.json",
+    3: "/home/dongminkim/Desktop/KAIST-Mobility-Challenge-H6/task3/path/path3_3.json",
+    4: "/home/dongminkim/Desktop/KAIST-Mobility-Challenge-H6/task3/path/path3_4.json",
 }
 
 LOG_EVERY_N = 20  # 20틱=1초 (TICK=0.05 기준), 1이면 매틱 출력
@@ -80,6 +81,9 @@ class Problem3DualZoneGuardianMux(Node):
         self.cmd_limit = {vid: 99.0 for vid in self.VEH_IDS}
         self.tgt_limit = {vid: None for vid in self.VEH_IDS}
 
+        # [ADD] hv gate speed limiter (hv.py publishes /CAV_XX_gate_speed)
+        self.gate_speed = {vid: 99.0 for vid in self.VEH_IDS}
+
         # zones
         self.zones = {
             "TOP": self._make_zone_state(self.TOP_CENTER, straight_id=3, release_target=1),
@@ -91,6 +95,15 @@ class Problem3DualZoneGuardianMux(Node):
             topic = self.TOPICS[vid]
             self.create_subscription(PoseStamped, topic, self._make_pose_cb(vid), qos)
             self.create_subscription(Accel, f"{topic}_accel_raw", self._make_raw_cb(vid), 10)
+
+        # [ADD] gate speed subscribers
+        for vid in self.VEH_IDS:
+            self.create_subscription(
+                Float32,
+                f"/CAV_{vid:02d}_gate_speed",
+                self._make_gate_cb(vid),
+                10
+            )
 
         self.pub = {
             vid: self.create_publisher(Accel, f"{self.TOPICS[vid]}_accel", 10)
@@ -138,6 +151,12 @@ class Problem3DualZoneGuardianMux(Node):
     def _make_raw_cb(self, vid):
         def cb(msg: Accel):
             self.raw[vid] = msg
+        return cb
+
+    # [ADD] gate speed cb
+    def _make_gate_cb(self, vid):
+        def cb(msg: Float32):
+            self.gate_speed[vid] = float(msg.data)
         return cb
 
     # ============================================================
@@ -342,7 +361,9 @@ class Problem3DualZoneGuardianMux(Node):
         for vid in self.VEH_IDS:
             raw_v = float(self.raw[vid].linear.x)
             lim = float(self.cmd_limit[vid])
-            out_v = min(raw_v, lim)
+            gate = float(self.gate_speed[vid])  # [ADD]
+
+            out_v = min(raw_v, lim, gate)  # [MOD] gate limiter 추가
 
             out = Accel()
             out.linear.x = float(out_v)
