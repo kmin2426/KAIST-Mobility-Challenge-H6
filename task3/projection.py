@@ -10,7 +10,7 @@ from geometry_msgs.msg import PoseStamped, Accel
 
 ########### Constants
 PATH_FILES = [
-'/home/dongminkim/Desktop/KAIST-Mobility-Challenge-H6/task3/path/path_hv_2.json',   # 2사분면
+'/home/dongminkim/Desktop/KAIST-Mobility-Challenge-H6/task3/path/path_hv_2.csv',   # 2사분면
 '/home/dongminkim/Desktop/KAIST-Mobility-Challenge-H6/task3/path/path_hv_3.csv',    # 3사분면
 '/home/dongminkim/Desktop/KAIST-Mobility-Challenge-H6/task3/path/path_hv.json',     # 전체 경로
 '/home/dongminkim/Desktop/KAIST-Mobility-Challenge-H6/task3/path/path3_1_zone.csv', # CAV 1 영역
