@@ -244,7 +244,7 @@ class Problem3DualZoneGuardianMux(Node):
         self.BOT_CENTER = (-2.3342, -2.3073)
 
         # 충돌 구역 반경 
-        self.RADIUS = 1.6
+        self.RADIUS = 1.5
         self.EXIT_RADIUS = 0.4
 
         # approaching 판단
