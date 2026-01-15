@@ -329,7 +329,7 @@ class Problem3DualZoneGuardianMux(Node):
         # [ADD] Start/Exit HV Safety settings  (첫 번째 코드 통합)
         # ============================================================
         self.TARGET_VELOCITY = 0.7
-        self.ZONE_RADIUS = 0.20
+        self.ZONE_RADIUS = 0.25
         self.HV_DETECT_RADIUS = 0.10
         self.RESET_DISTANCE = 2.2
 
