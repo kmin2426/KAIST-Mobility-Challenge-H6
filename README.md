@@ -55,9 +55,12 @@ This project is built on the official KAIST Mobility Challenge Simulator.
 │   ├── path
 │   └── pure_pursuit_pid.py
 └── task2
+│   ├── path
+│   └── task_2_ace.py
+│   └── task_2_legend.py
+│   └── task_2_legend_ace.py
+└── task3
     ├── path
-    └── task_2_ace.py
-    └── task_2_legend.py
-    └── task_2_legend_ace.py
+    └── task_3_legend.py
 
 ```
