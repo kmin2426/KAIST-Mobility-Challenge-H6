@@ -15,19 +15,28 @@ sys.stdout.reconfigure(line_buffering=True)
 # ============================================================
 # [설정] 파라미터
 # ============================================================
-TARGET_VELOCITY = 0.7       # 목표 주행 속도 (가속 시)
-SLOW_VELOCITY   = 0.3       # ACC 감속 속도 (거리 < 40cm)
-STOP_VELOCITY   = 0.01      # 정지 속도
-ZONE_RADIUS     = 0.30      # 구역 감지 반경
-HV_DETECT_RADIUS = 0.10     # HV 경로 감지 반경
+TARGET_VELOCITY = 0.7       # 기본 주행 속도
+CRAWL_VELOCITY  = 0.35      # 서행 속도
+STOP_VELOCITY   = 0.0       # 정지 속도
+BOOST_VELOCITY  = 2.0       # 탈출 속도
 
-# 가속도 제한 (Soft Start)
-ACCEL_STEP      = 0.04      
+SLOW_VELOCITY   = 0.2       
+MAX_ACC_VELOCITY = 2.0      
 
-# ACC 거리 기준 (40cm)
-ACC_DIST_LIMIT  = 0.40
+ZONE_RADIUS     = 0.20      # 구역 반경 (20cm)
+HV_DETECT_RADIUS = 0.15     # HV 감지 반경 (트리거용)
 
-# 리셋 거리
+# ★ [신규 요청] 출발 시 안전 거리 (45cm)
+START_SAFETY_DIST = 0.45    
+
+# 가속도 제한
+ACCEL_STEP      = 0.1       
+
+# ACC 거리 유지 파라미터 (주행 중)
+ACC_DIST_LIMIT  = 0.42      
+ACC_P_GAIN      = 2.5       
+
+# 리셋 거리 (다음 바퀴 준비용)
 RESET_DISTANCE  = 2.2       
 
 CTRL_PARAMS = {
@@ -79,25 +88,30 @@ class VehicleController(Node):
         self.start_zone_points = load_zone_from_csv(start_zone)
         self.start_trigger_points = load_zone_from_csv(start_trigger)
         self.out_zone_points = load_zone_from_csv(out_zone)
-        # danger_zone은 CAV 3,4에게는 'ACC 감지 구간(HV경로)' 역할을 함
         self.danger_zone_points = load_zone_from_csv(danger_zone)
 
         # 로그
         if self.vid in [3, 4] and self.danger_zone_points:
-            print(f"[INFO] V{self.id_str} ACC Logic (Y-Check) Activated")
+            print(f"[INFO] V{self.id_str} Smart ACC Logic Activated")
         elif self.out_zone_points:
-            print(f"[INFO] V{self.id_str} Exit Conflict Logic Activated")
+            print(f"[INFO] V{self.id_str} Exit Logic Activated")
 
         # 2. 상태 변수
         self.curr_x = 0.0
         self.curr_y = 0.0
         self.curr_yaw = 0.0
         
-        # Soft Start용 현재 명령 속도
         self.current_cmd_vel = 0.0 
-        
         self.stop_logic_disabled = False 
         
+        # ★ [신규] 출발 시 39cm 거리 유지 기능을 켤지 말지 결정하는 플래그
+        self.is_start_gap_check_active = False
+
+        # 상태 관리
+        self.is_in_out_zone = False     
+        self.boost_active = False       
+        self.boost_start_pos = (0, 0)   
+
         # HV 상태
         self.hv19_x, self.hv19_y = 0.0, 0.0
         self.hv20_x, self.hv20_y = 0.0, 0.0
@@ -143,22 +157,13 @@ class VehicleController(Node):
         return min_d
 
     def _get_closest_hv_front(self):
-        """ 
-        내 앞(Y값이 더 작은 쪽)에 있는 가장 가까운 HV 거리 반환
-        조건: HV_Y < My_Y
-        """
         closest_dist = 999.0
-        
-        # HV 19 체크 (Y좌표 비교)
         if self.hv19_active and self.hv19_y < self.curr_y:
             d = math.hypot(self.hv19_x - self.curr_x, self.hv19_y - self.curr_y)
             if d < closest_dist: closest_dist = d
-            
-        # HV 20 체크 (Y좌표 비교)
         if self.hv20_active and self.hv20_y < self.curr_y:
             d = math.hypot(self.hv20_x - self.curr_x, self.hv20_y - self.curr_y)
             if d < closest_dist: closest_dist = d
-            
         return closest_dist
 
     # --- 메인 루프 ---
@@ -173,61 +178,99 @@ class VehicleController(Node):
         
         if not self.path: return
 
-        # [Default] 기본은 0.7 (구역 밖이거나 특별한 일 없으면)
+        # [Default] 기본은 0.7
         target_vel_req = TARGET_VELOCITY 
 
         # ---------------------------------------------------------
-        # [Logic 1] Start Zone (공통)
+        # [Logic 1] Start Zone (정지 및 39cm 유지 로직)
         # ---------------------------------------------------------
         dist_to_start = self._get_min_dist(self.start_zone_points)
 
-        if self.stop_logic_disabled:
-            if dist_to_start > RESET_DISTANCE:
-                self.stop_logic_disabled = False
-        else:
+        # 1-1. 멀티 랩 리셋 (2.2m 이상 멀어지면 초기화)
+        if dist_to_start > RESET_DISTANCE:
+            self.stop_logic_disabled = False
+            self.is_start_gap_check_active = False # 확실하게 꺼줌
+
+        # 1-2. 정지 구역 제어
+        if not self.stop_logic_disabled:
+            # 구역 진입 (20cm 이내)
             if dist_to_start < ZONE_RADIUS:
                 target_vel_req = STOP_VELOCITY 
+                # HV가 트리거 구역에 들어옴 -> 출발 허가
                 if self._check_hv_in_zone(self.start_trigger_points):
-                    target_vel_req = TARGET_VELOCITY
                     self.stop_logic_disabled = True
-                    print(f"[START] V{self.id_str} Soft Start...", end='\r')
+                    # ★ 기능 켜기: 이제부터 20cm 벗어날 때까지 거리 검사 시작
+                    self.is_start_gap_check_active = True 
+                    # 일단 출발 속도 입력
+                    target_vel_req = TARGET_VELOCITY
+                    print(f"[START] V{self.id_str} Triggered! Checking Gap...", end='\r')
                 else:
-                    print(f"[WAIT] V{self.id_str} Waiting...", end='\r')
+                    print(f"[WAIT] V{self.id_str} Waiting for HV...", end='\r')
+
+        # 1-3. ★ [신규 기능] 출발 직후 39cm 거리 유지 로직
+        # 정지 신호가 풀렸어도(stop_logic_disabled=True), 구역 근처라면 검사 수행
+        if self.is_start_gap_check_active:
+            # (A) 해제 조건: 구역에서 20cm(ZONE_RADIUS) 이상 벗어났는가?
+            if dist_to_start > ZONE_RADIUS:
+                self.is_start_gap_check_active = False # 기능 OFF
+                print(f"[GAP] Zone Exited (>20cm). Gap Logic OFF    ", end='\r')
+            
+            # (B) 유지 조건: 아직 구역 근처임 -> 거리 검사
+            else:
+                dist_hv = self._get_closest_hv_front()
+                # 거리가 39cm 보다 가까우면?
+                if dist_hv < START_SAFETY_DIST:
+                    target_vel_req = STOP_VELOCITY # 멈춰!
+                    print(f"[GAP] Too Close ({dist_hv:.2f}m < 0.39m) WAIT  ", end='\r')
+                else:
+                    # 39cm 이상이면 원래 가려던 속도 유지
+                    pass 
 
         # ---------------------------------------------------------
         # [Logic 2] Exit Conflict (CAV 1, 2)
         # ---------------------------------------------------------
-        if self.vid in [1, 2] and self.out_zone_points and self.danger_zone_points:
-            if self._get_min_dist(self.out_zone_points) < ZONE_RADIUS:
+        if self.out_zone_points and self.danger_zone_points:
+            dist_to_out = self._get_min_dist(self.out_zone_points)
+            
+            # (A) 구역 내부
+            if dist_to_out < ZONE_RADIUS:
+                self.is_in_out_zone = True
+                self.boost_active = False
+
                 if self._check_hv_in_zone(self.danger_zone_points):
                     target_vel_req = STOP_VELOCITY 
-                    print(f"[YIELD] V{self.id_str} Stop (Yield)", end='\r')
+                else:
+                    target_vel_req = CRAWL_VELOCITY 
+
+            # (B) 구역 탈출
+            else:
+                if self.is_in_out_zone: 
+                    self.is_in_out_zone = False
+                    self.boost_active = True
+                    self.boost_start_pos = (self.curr_x, self.curr_y)
+
+                if self.boost_active:
+                    target_vel_req = BOOST_VELOCITY
+                    dist_boosted = math.hypot(self.curr_x - self.boost_start_pos[0], 
+                                              self.curr_y - self.boost_start_pos[1])
+                    if dist_boosted > 0.8: 
+                        self.boost_active = False
 
         # ---------------------------------------------------------
-        # [Logic 3] ACC (CAV 3, 4) - 요청하신 기능
-        # 조건: 내가 path_hv 안에 있고 + HV가 내 앞에 있을 때
+        # [Logic 3] Smart ACC (CAV 3, 4)
         # ---------------------------------------------------------
         if self.vid in [3, 4] and self.danger_zone_points:
-            # 1. 내가 HV 경로 구역 안에 있는가?
             if self._get_min_dist(self.danger_zone_points) < ZONE_RADIUS:
-                
-                # 2. 내 앞(Y가 작은 쪽)에 HV가 있는가?
                 dist_hv = self._get_closest_hv_front()
-                
-                if dist_hv < 999.0: # 앞에 HV가 있음
-                    if dist_hv < ACC_DIST_LIMIT: # < 40cm
-                        target_vel_req = SLOW_VELOCITY # 감속
-                        print(f"[ACC] Too Close ({dist_hv:.2f}m) -> Slow", end='\r')
-                    else: # > 40cm
-                        # 정지 상태가 아니라면(Logic 1이 잡고 있지 않다면) 가속
+                if dist_hv < 999.0:
+                    dist_error = dist_hv - ACC_DIST_LIMIT
+                    if dist_error < 0: 
+                        target_vel_req = SLOW_VELOCITY
+                    else: 
                         if target_vel_req > STOP_VELOCITY:
-                            target_vel_req = TARGET_VELOCITY # 가속(원래 속도)
-                            print(f"[ACC] Clear ({dist_hv:.2f}m) -> Accel", end='\r')
-                else:
-                    # 구역 안이지만 앞에 차가 없음 -> 원래 속도
-                    pass
+                            catch_up_vel = TARGET_VELOCITY + (dist_error * ACC_P_GAIN)
+                            target_vel_req = min(catch_up_vel, MAX_ACC_VELOCITY)
             else:
-                # 3. 구역을 빠져나옴 -> 원래 속도 0.7 (Logic 1이 잡지 않는 한)
                 if target_vel_req > STOP_VELOCITY:
                     target_vel_req = TARGET_VELOCITY
 
@@ -235,7 +278,6 @@ class VehicleController(Node):
         self._control_vehicle(target_vel_req)
 
     def _control_vehicle(self, target_vel):
-        # Soft Start (가속 제한)
         if target_vel > self.current_cmd_vel:
             self.current_cmd_vel += ACCEL_STEP
             if self.current_cmd_vel > target_vel:
@@ -243,7 +285,6 @@ class VehicleController(Node):
         else:
             self.current_cmd_vel = target_vel
 
-        # Pure Pursuit
         min_dist = 1e9
         idx = 0
         path_len = len(self.path)
@@ -278,13 +319,9 @@ class VehicleController(Node):
         cmd.angular.z = float(steer)
         self.pub_cmd.publish(cmd)
 
-# ============================================================
-# [메인 실행]
-# ============================================================
 def main(args=None):
     rclpy.init(args=args)
     
-    # (ID, Path, Start_Zone, Start_Trigger, Out_Zone, Danger_Zone)
     cars_config = [
         (1, 'path3_1.json', 'path3_1_zone.csv', 'path_hv_3_1.csv', 'path3_1_out_zone.csv', 'path_hv_3_2.csv'), 
         (2, 'path3_2.json', 'path3_2_zone.csv', 'path_hv_2_1.csv', 'path3_2_out_zone.csv', 'path_hv_2_2.csv'), 
@@ -295,7 +332,7 @@ def main(args=None):
     executor = MultiThreadedExecutor()
     nodes = []
 
-    print("=== FINAL SYSTEM: Complete Safety & ACC Logic ===")
+    print("=== FINAL SYSTEM: Start Zone Safety Gap (39cm) Added ===")
     
     for vid, p_file, s_zone, s_trig, o_zone, d_zone in cars_config:
         node = VehicleController(vid, p_file, s_zone, s_trig, o_zone, d_zone)
