@@ -50,7 +50,6 @@ This project is built on the official KAIST Mobility Challenge Simulator.
 │   ├── path_generator.py
 │   ├── path_shifted.py
 │   └── waypoint
-├── project_structure.txt
 ├── task1-1
 │   ├── path
 │   └── pure_pursuit_pid.py
