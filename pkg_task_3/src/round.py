@@ -16,18 +16,18 @@ sys.stdout.reconfigure(line_buffering=True)
 # [설정] 파라미터
 # ============================================================
 TARGET_VELOCITY = 0.7       # 기본 주행 속도
-CRAWL_VELOCITY  = 0.32      # 서행 속도
+CRAWL_VELOCITY  = 0.28      # 서행 속도
 STOP_VELOCITY   = 0.0       # 정지 속도
 BOOST_VELOCITY  = 2.0       # 탈출 속도
 
 SLOW_VELOCITY   = 0.2       
 MAX_ACC_VELOCITY = 2.0      
 
-ZONE_RADIUS     = 0.23      # 구역 반경 (38cm)
-HV_DETECT_RADIUS = 0.15     # HV 감지 반경 (트리거용)
+ZONE_RADIUS     = 0.21      # 구역 반경 (38cm)
+HV_DETECT_RADIUS = 0.12     # HV 감지 반경 (트리거용)
 
 # 출발 시 안전 거리 (45cm)
-START_SAFETY_DIST = 0.5    
+START_SAFETY_DIST = 0.43    
 
 # 가속도 제한
 ACCEL_STEP      = 0.1       
@@ -36,11 +36,17 @@ ACCEL_STEP      = 0.1
 ACC_DIST_LIMIT  = 0.42      
 ACC_P_GAIN      = 2.5       
 
+ACC_EXIT_BOOST_VEL  = 1.8   # 탈출 직후 최고속도
+ACC_EXIT_BOOST_DIST = 0.009   # 몇 m 동안 유지할지 
+
 # 리셋 거리 (다음 바퀴 준비용)
 RESET_DISTANCE  = 2.2       
 
+# CAV 01, 02 출구 가속 거리
+# HV: 0.5, 1.0, 1.5 의 경우 0.48 이었음
+EXIT_BOOST_DIST = 0.8
 CTRL_PARAMS = {
-    "look_ahead": 0.5, 
+    "look_ahead": 0.50, 
     "kp": 6.0, 
     "ki": 0.05, 
     "kd": 1.0, 
@@ -130,6 +136,10 @@ class VehicleController(Node):
         self.sub_pose = self.create_subscription(PoseStamped, self.topic_pose, self._callback_pose, qos)
         # 변경
         self.pub_cmd  = self.create_publisher(Accel, f"/CAV_{self.id_str}_accel_round_raw", 10)
+        self.acc_zone_prev_in = False
+        self.acc_exit_boost_active = False
+        self.acc_exit_boost_start_pos = (0.0, 0.0)
+
 
         if self.start_trigger_points or self.danger_zone_points:
             self.sub_hv19 = self.create_subscription(PoseStamped, "/HV_19", self._callback_hv19, qos)
@@ -256,26 +266,68 @@ class VehicleController(Node):
                     target_vel_req = BOOST_VELOCITY
                     dist_boosted = math.hypot(self.curr_x - self.boost_start_pos[0], 
                                               self.curr_y - self.boost_start_pos[1])
-                    if dist_boosted > 0.8: 
+                    if dist_boosted > EXIT_BOOST_DIST: 
                         self.boost_active = False
 
         # ---------------------------------------------------------
         # [Logic 3] Smart ACC (CAV 3, 4)
         # ---------------------------------------------------------
+        # if self.vid in [3, 4] and self.danger_zone_points:
+        #     if self._get_min_dist(self.danger_zone_points) < ZONE_RADIUS:
+        #         dist_hv = self._get_closest_hv_front()
+        #         if dist_hv < 999.0:
+        #             dist_error = dist_hv - ACC_DIST_LIMIT
+        #             if dist_error < 0: 
+        #                 target_vel_req = SLOW_VELOCITY
+        #             else: 
+        #                 if target_vel_req > STOP_VELOCITY:
+        #                     catch_up_vel = TARGET_VELOCITY + (dist_error * ACC_P_GAIN)
+        #                     target_vel_req = min(catch_up_vel, MAX_ACC_VELOCITY)
+        #     else:
+        #         if target_vel_req > STOP_VELOCITY:
+        #             target_vel_req = TARGET_VELOCITY
+
+        # ---------------------------------------------------------
+        # [Logic 3] Smart ACC (CAV 3, 4) + Exit Boost
+        # ---------------------------------------------------------
         if self.vid in [3, 4] and self.danger_zone_points:
-            if self._get_min_dist(self.danger_zone_points) < ZONE_RADIUS:
-                dist_hv = self._get_closest_hv_front()
-                if dist_hv < 999.0:
-                    dist_error = dist_hv - ACC_DIST_LIMIT
-                    if dist_error < 0: 
-                        target_vel_req = SLOW_VELOCITY
-                    else: 
-                        if target_vel_req > STOP_VELOCITY:
-                            catch_up_vel = TARGET_VELOCITY + (dist_error * ACC_P_GAIN)
-                            target_vel_req = min(catch_up_vel, MAX_ACC_VELOCITY)
+
+            in_acc_zone = (self._get_min_dist(self.danger_zone_points) < ZONE_RADIUS)
+
+            # (1) zone -> 밖으로 나가는 "엣지"에서 부스트 시작
+            if (self.acc_zone_prev_in is True) and (in_acc_zone is False):
+                self.acc_exit_boost_active = True
+                self.acc_exit_boost_start_pos = (self.curr_x, self.curr_y)
+
+            self.acc_zone_prev_in = in_acc_zone
+
+            # (2) 부스트가 켜져있으면: 일정 거리까지 최고속도 유지
+            if self.acc_exit_boost_active:
+                target_vel_req = ACC_EXIT_BOOST_VEL
+                dist_boosted = math.hypot(self.curr_x - self.acc_exit_boost_start_pos[0],
+                                        self.curr_y - self.acc_exit_boost_start_pos[1])
+                if dist_boosted > ACC_EXIT_BOOST_DIST:
+                    self.acc_exit_boost_active = False
+
+            # (3) 부스트가 꺼져있으면: 기존 Smart ACC 동작
             else:
-                if target_vel_req > STOP_VELOCITY:
-                    target_vel_req = TARGET_VELOCITY
+                if in_acc_zone:
+                    dist_hv = self._get_closest_hv_front()
+                    if dist_hv < 999.0:
+                        dist_error = dist_hv - ACC_DIST_LIMIT
+                        if dist_error < 0:
+                            target_vel_req = SLOW_VELOCITY
+                        else:
+                            if target_vel_req > STOP_VELOCITY:
+                                catch_up_vel = TARGET_VELOCITY + (dist_error * ACC_P_GAIN)
+                                target_vel_req = min(catch_up_vel, MAX_ACC_VELOCITY)
+                else:
+                    if target_vel_req > STOP_VELOCITY:
+                        target_vel_req = TARGET_VELOCITY
+
+
+
+
 
         # 주행 제어 호출
         self._control_vehicle(target_vel_req)

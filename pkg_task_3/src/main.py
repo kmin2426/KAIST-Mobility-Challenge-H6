@@ -22,7 +22,7 @@ PATH_DIR = os.path.join(BASE_DIR, "path")
 # ============================================================
 RAW_SLOW_ZONES = [
     (-0.1, -4.6,  1.8, -1.8), # 사지교차로 범위
-    ( 0.4,  2.7,  1.4, -1.4), # 회전교차로 범위
+    ( 0.4,  2.7,  1.8, -1.4), # 회전교차로 범위
 ]
 
 # Normalize coordinates (min, max) for safety
@@ -33,7 +33,7 @@ SLOW_ZONES = [
 
 SLOW_PARAMS = {
     "vel": 0.7,          
-    "look_ahead": 0.40, 
+    "look_ahead": 0.50, 
     "kp": 6.0,          
     "ki": 0.045,
     "kd": 1.0,          
@@ -45,10 +45,9 @@ SLOW_PARAMS = {
 # ============================================================
 
 # 1. Hard Curve (Low Speed, High Gain)
-# 1. Hard Curve (Low Speed, High Gain)
 HARD_PARAMS = {
     "vel": 0.6,
-    "look_ahead": 0.55,
+    "look_ahead": 0.56,
     "kp": 6.0,
     "ki": 0.045,
     "kd": 1.0,
@@ -57,7 +56,7 @@ HARD_PARAMS = {
 
 # 2. Easy Curve (Medium Speed)
 EASY_PARAMS = {
-    "vel": 1.0,
+    "vel": 0.8,
     "look_ahead": 0.60, 
     "kp": 6.0,
     "ki": 0.05,
@@ -67,7 +66,7 @@ EASY_PARAMS = {
 
 # 3. Straight (High Speed, Stability Focused)
 STRAIGHT_PARAMS = {
-    "vel": 1.2,
+    "vel": 0.9,
     "look_ahead": 1.2,  # Increased for high speed
     "kp": 2.0,          # Reduced to prevent oscillation
     "ki": 0.002,        # Minimize integral windup
