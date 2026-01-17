@@ -21,7 +21,7 @@ PATH_DIR = os.path.join(BASE_DIR, "path")
 # [1] Slow Zones Configuration (Fixed at 0.7 m/s)
 # ============================================================
 RAW_SLOW_ZONES = [
-    (-0.4, -4.3,  1.8, -1.8), # 사지교차로 범위
+    (-0.1, -4.6,  1.8, -1.8), # 사지교차로 범위
     ( 0.4,  2.7,  1.4, -1.4), # 회전교차로 범위
 ]
 
@@ -32,7 +32,7 @@ SLOW_ZONES = [
 ]
 
 SLOW_PARAMS = {
-    "vel": 0.55,          
+    "vel": 0.7,          
     "look_ahead": 0.40, 
     "kp": 6.0,          
     "ki": 0.045,
@@ -342,10 +342,6 @@ class MapPredictionDriver(Node):
         cmd.angular.z = float(final_steer)
         self.accel_raw_pub.publish(cmd)
 
-        self.log_counter += 1
-        if self.log_counter % 20 == 0:
-            print(f"[C{self.vid}] Pos:({self.curr_x:.2f}, {self.curr_y:.2f}) | Mode:[{current_mode_str}] | Vel:{self.current_vel_cmd:.2f} | Steer:{final_steer:.2f}")
-
 
 # ============================================================
 # [NODE] Dual Zone Guardian Mux (Safety Controller)
@@ -466,6 +462,31 @@ class Problem3DualZoneGuardianMux(Node):
         }
 
         self.create_timer(self.TICK, self.tick)
+
+        # =========================
+        # LAP COUNTER (auto start point)
+        # =========================
+        self.TARGET_LAPS = 5
+
+        self.LAP_ENTER_R = 0.35
+        self.LAP_EXIT_R  = 0.9
+        self.MIN_LAP_DIST = 3.0
+        self.MIN_LAP_TIME = 3.0
+
+        self.start_point = {v: None for v in self.VEH_IDS}      # (x,y) first pose
+        self.start_inited = {v: False for v in self.VEH_IDS}
+
+        self.lap_cnt = {v: 0 for v in self.VEH_IDS}
+        self.lap_armed = {v: False for v in self.VEH_IDS}       # must go OUT once
+        self.last_lap_time = {v: None for v in self.VEH_IDS}
+        self.dist_since_lap = {v: 0.0 for v in self.VEH_IDS}
+        self.prev_for_dist = {v: None for v in self.VEH_IDS}
+        self.LAP_LOG_PERIOD = 20   # tick 기준 (20 * 0.05s = 1초)
+        self._lap_log_cnt = 0
+        
+
+
+
 
     # --- Callbacks & Helpers ---
     def _cb_hv19(self, msg): self.hv19 = (float(msg.pose.position.x), float(msg.pose.position.y)); self.hv19_active = True
@@ -604,6 +625,64 @@ class Problem3DualZoneGuardianMux(Node):
                 if hit: return self.STOP_VELOCITY, True, f"EXIT_YIELD(HV_{w})"
         return None, False, None
 
+    def _update_laps(self):
+        now = self.get_clock().now().nanoseconds / 1e9
+
+        for vid in self.VEH_IDS:
+            p = self.pose.get(vid)
+            if p is None:
+                continue
+
+            # (A) start point init (first pose)
+            if not self.start_inited[vid]:
+                self.start_point[vid] = (p[0], p[1])
+                self.start_inited[vid] = True
+                self.prev_for_dist[vid] = (p[0], p[1])
+                self.dist_since_lap[vid] = 0.0
+                self.lap_armed[vid] = False  # must go out first
+                print(f"[LAP_INIT] CAV{vid} start_point=({p[0]:.2f},{p[1]:.2f})")
+                continue
+
+            sp = self.start_point[vid]
+            d = math.hypot(p[0]-sp[0], p[1]-sp[1])
+
+            # (B) accumulate distance (anti double count)
+            prev = self.prev_for_dist[vid]
+            if prev is not None:
+                self.dist_since_lap[vid] += math.hypot(p[0]-prev[0], p[1]-prev[1])
+            self.prev_for_dist[vid] = (p[0], p[1])
+
+            # (C) re-arm once it leaves start area
+            if d > self.LAP_EXIT_R:
+                self.lap_armed[vid] = True
+
+            # (D) count lap when it comes back in
+            if self.lap_armed[vid] and d < self.LAP_ENTER_R:
+                ok_time = True
+                if self.last_lap_time[vid] is not None:
+                    ok_time = (now - self.last_lap_time[vid]) >= self.MIN_LAP_TIME
+
+                ok_dist = self.dist_since_lap[vid] >= self.MIN_LAP_DIST
+
+                if ok_time and ok_dist:
+                    self.lap_cnt[vid] += 1
+                    self.last_lap_time[vid] = now
+                    self.dist_since_lap[vid] = 0.0
+                    self.lap_armed[vid] = False
+                    print(f"[LAP] CAV{vid} -> {self.lap_cnt[vid]}/{self.TARGET_LAPS}")
+
+
+    def _print_lap_status(self):
+        msg = "[LAP_STATUS] "
+        parts = []
+        for vid in self.VEH_IDS:
+            parts.append(f"CAV{vid:02d}: {self.lap_cnt[vid]} lap")
+        msg += " | ".join(parts)
+        print(msg)
+
+
+
+
     # --- Main Loop ---
     def tick(self):
         # ✅ Roundabout ON 여부: (누구라도) 회전교차로 박스 안이면 True
@@ -708,14 +787,13 @@ class Problem3DualZoneGuardianMux(Node):
             out.angular.z = float(steer)
             self.pub[vid].publish(out)
 
-        self._log_counter += 1
-        if self._log_counter % 20 == 0:
-            print(f"[GUARD] TOP:{top_eff} BOT:{bot_eff} FW:{fw_eff}")
-            for vid in self.VEH_IDS:
-                if hv_r[vid]: print(f"  > CAV{vid} SAFETY: {hv_r[vid]}")
+        self._update_laps()
+        self._lap_log_cnt += 1
+        if self._lap_log_cnt % self.LAP_LOG_PERIOD == 0:
+            self._print_lap_status()
 
-        if self._log_counter % 20 == 0:
-            print(f"[GUARD] roundabout_on={roundabout_on} TOP:{top_eff} BOT:{bot_eff} FW:{fw_eff}")
+
+
 
 # ============================================================
 # MAIN EXECUTION

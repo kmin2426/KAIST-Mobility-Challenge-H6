@@ -40,8 +40,10 @@ ACC_P_GAIN      = 2.5
 RESET_DISTANCE  = 2.2       
 
 CTRL_PARAMS = {
-    "look_ahead": 0.38, 
-    "kp": 6.0, "ki": 0.05, "kd": 1.0, 
+    "look_ahead": 0.5, 
+    "kp": 6.0, 
+    "ki": 0.05, 
+    "kd": 1.0, 
     "k_cte": 4.0
 }
 
