@@ -16,14 +16,14 @@ sys.stdout.reconfigure(line_buffering=True)
 # [설정] 파라미터
 # ============================================================
 TARGET_VELOCITY = 0.7       # 기본 주행 속도
-CRAWL_VELOCITY  = 0.35      # 서행 속도
+CRAWL_VELOCITY  = 0.32      # 서행 속도
 STOP_VELOCITY   = 0.0       # 정지 속도
 BOOST_VELOCITY  = 2.0       # 탈출 속도
 
 SLOW_VELOCITY   = 0.2       
 MAX_ACC_VELOCITY = 2.0      
 
-ZONE_RADIUS     = 0.38      # 구역 반경 (20cm)
+ZONE_RADIUS     = 0.23      # 구역 반경 (38cm)
 HV_DETECT_RADIUS = 0.15     # HV 감지 반경 (트리거용)
 
 # 출발 시 안전 거리 (45cm)

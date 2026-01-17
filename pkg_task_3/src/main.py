@@ -32,7 +32,7 @@ SLOW_ZONES = [
 ]
 
 SLOW_PARAMS = {
-    "vel": 0.6,          
+    "vel": 0.55,          
     "look_ahead": 0.40, 
     "kp": 6.0,          
     "ki": 0.045,
@@ -67,7 +67,7 @@ EASY_PARAMS = {
 
 # 3. Straight (High Speed, Stability Focused)
 STRAIGHT_PARAMS = {
-    "vel": 1.8,
+    "vel": 1.2,
     "look_ahead": 1.2,  # Increased for high speed
     "kp": 2.0,          # Reduced to prevent oscillation
     "ki": 0.002,        # Minimize integral windup
@@ -79,7 +79,7 @@ STRAIGHT_PARAMS = {
 WHEELBASE = 0.211
 DIST_CENTER_TO_REAR = WHEELBASE / 2.0
 TICK_RATE = 0.05
-ACCEL_LIMIT = 2.5
+ACCEL_LIMIT = 1.5
 DECEL_LIMIT = 3.0
 
 
