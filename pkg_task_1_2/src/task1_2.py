@@ -10,11 +10,13 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import PoseStamped, Accel
 
+
 # ============================================================
-# PATH BASE (Docker / ROS pkg 대응)
+# PATH BASE (For Docker and Pkg)
 # ============================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PATH_DIR = os.path.join(BASE_DIR, "path")
+
 
 # ============================================================
 # IO helpers
@@ -45,6 +47,7 @@ def load_path_points(json_file: str):
     if not xs or not ys:
         return []
     return [(float(x), float(y)) for x, y in zip(xs, ys)]
+
 
 # ============================================================
 # Geometry helpers
@@ -97,50 +100,61 @@ def dist2_point_to_polyline(px, py, pts):
             best = d2
     return best
 
+def normalize_angle(a):
+    while a > math.pi: a -= 2.0 * math.pi
+    while a < -math.pi: a += 2.0 * math.pi
+    return a
+
+
 # ============================================================
 # Global Settings
 # ============================================================
-
 WHEELBASE = 0.211
 DIST_CENTER_TO_REAR = WHEELBASE / 2.0
 TICK = 0.05
-TARGET_VELOCITY = 0.70
+TARGET_VELOCITY = 0.9
 MINSPEED = 0.0
 
 # guardian이 계산한 속도 제한(최종 속도 상한)
 GUARDIAN_LIMITS = {1: 99.0, 2: 99.0}
 
+
 # ============================================================
-# ✅ Driver: "3단 변속 + Jump Detection"만 이식 (raw publish 유지)
-# - 기존 Guardian(사지교차로/합류/우선순위) 로직은 절대 안 건드림
+# Hyperparameters for ZonePriorityDriver
 # ============================================================
+
+# 1. Hard Curve (Low Speed, High Gain)
 HARD_PARAMS = {
     "vel": 0.6,
-    "look_ahead": 0.60,
-    "kp": 6.5,
+    "look_ahead": 0.53,
+    "kp": 6.0,
     "ki": 0.045,
     "kd": 1.0,
     "k_cte": 5.0
 }
+
+# 2. Easy Curve (Medium Speed)
 EASY_PARAMS = {
-    "vel": 0.7,
-    "look_ahead": 0.39,
+    "vel": 1.0,
+    "look_ahead": 0.60, 
     "kp": 6.0,
     "ki": 0.05,
     "kd": 1.0,
     "k_cte": 4.0
 }
+
+# 3. Straight (High Speed, Stability Focused)
 STRAIGHT_PARAMS = {
-    "vel": 0.70,
-    "look_ahead": 0.50,
-    "kp": 4.0,
-    "ki": 0.005,
-    "kd": 2.0,
+    "vel": 1.2,
+    "look_ahead": 1.2,  # Increased for high speed
+    "kp": 2.0,          # Reduced to prevent oscillation
+    "ki": 0.002,        # Minimize integral windup
+    "kd": 2.5,          # Increased damping
     "k_cte": 1.0
 }
 
-ACCEL_LIMIT = 3.0
-DECEL_LIMIT = 3.0 
+ACCEL_LIMIT = 2.0
+DECEL_LIMIT = 3.5
 
 class ZonePriorityDriver(Node):
     def __init__(self, vehicle_id: int):
@@ -160,7 +174,6 @@ class ZonePriorityDriver(Node):
             depth=10
         )
 
-        # ✅ raw만 publish
         self.accel_raw_pub = self.create_publisher(Accel, f"{self.MY_TOPIC}_accel_raw", 10)
         self.create_subscription(PoseStamped, self.MY_TOPIC, self.pose_callback, qos)
 
@@ -181,32 +194,53 @@ class ZonePriorityDriver(Node):
         self.last_time = self.get_clock().now()
 
         self.current_vel_cmd = 0.5
-        self.mode = "HARD"  # 안전하게 시작
+        self.mode = "HARD"
         self.avg_steer_signed = 0.0
 
-        # jump detection / seam 안정화
-        self.last_idx = 0
+        # jump detection
+        self.old_nearest_idx = 0
         self._skip_dterm = 0
 
         self.create_timer(TICK, self.drive_loop)
 
     def pose_callback(self, msg: PoseStamped):
         self.got_pose = True
-        self.curr_yaw = msg.pose.orientation.z
-        self.curr_x = msg.pose.position.x - (DIST_CENTER_TO_REAR * math.cos(self.curr_yaw))
-        self.curr_y = msg.pose.position.y - (DIST_CENTER_TO_REAR * math.sin(self.curr_yaw))
+        self.curr_yaw = float(msg.pose.orientation.z)
+        self.curr_x = float(msg.pose.position.x) - (DIST_CENTER_TO_REAR * math.cos(self.curr_yaw))
+        self.curr_y = float(msg.pose.position.y) - (DIST_CENTER_TO_REAR * math.sin(self.curr_yaw))
 
-    def find_global_best_index(self):
-        if not self.path_pts:
-            return 0
-        best_i = 0
-        best_d = float("inf")
-        for i, (px, py) in enumerate(zip(self.path_x, self.path_y)):
-            d = math.hypot(px - self.curr_x, py - self.curr_y)
-            if d < best_d:
-                best_d = d
-                best_i = i
-        return best_i
+    def _choose_params(self):
+        if self.mode == "HARD":
+            return HARD_PARAMS
+        elif self.mode == "EASY":
+            return EASY_PARAMS
+        else:
+            return STRAIGHT_PARAMS
+
+    def _find_nearest_idx_windowed(self, search_range=50):
+        path_len = len(self.path_pts)
+        min_d = float("inf")
+        curr_idx = self.old_nearest_idx
+        found = False
+
+        for offset in range(-search_range, search_range + 1):
+            idx = (self.old_nearest_idx + offset) % path_len
+            d = math.hypot(self.path_x[idx] - self.curr_x, self.path_y[idx] - self.curr_y)
+            if d < min_d:
+                min_d = d
+                curr_idx = idx
+                found = True
+
+        if (not found) or (min_d > 5.0):
+            min_d = float("inf")
+            for i in range(path_len):
+                d = math.hypot(self.path_x[i] - self.curr_x, self.path_y[i] - self.curr_y)
+                if d < min_d:
+                    min_d = d
+                    curr_idx = i
+
+        self.old_nearest_idx = curr_idx
+        return curr_idx, min_d
 
     def drive_loop(self):
         if not self.got_pose or not self.path_pts:
@@ -218,89 +252,99 @@ class ZonePriorityDriver(Node):
         if dt <= 0.001 or dt > 0.1:
             return
 
-        # Step 1) 모드 파라미터
-        if self.mode == "HARD":
-            params = HARD_PARAMS
-        elif self.mode == "EASY":
-            params = EASY_PARAMS
-        else:
-            params = STRAIGHT_PARAMS
+        params = self._choose_params()
+        path_len = len(self.path_pts)
 
-        # Step 2) nearest index
-        num_pts = len(self.path_x)
-        min_d = float("inf")
-        curr_idx = 0
-        for i, (px, py) in enumerate(zip(self.path_x, self.path_y)):
-            d = math.hypot(px - self.curr_x, py - self.curr_y)
-            if d < min_d:
-                min_d = d
-                curr_idx = i
+        # Step 1) nearest index (windowed)
+        curr_idx, min_d = self._find_nearest_idx_windowed(search_range=50)
 
-        # Step 2-1) Jump detection + relocalize + Dterm skip
+        # Step 1-1) Jump detection + relocalize + D-term skip
         if min_d > 0.8:
-            curr_idx = self.find_global_best_index()
-            self.last_idx = curr_idx
+            # 글로벌 재탐색
+            best_i = 0
+            best_d = float("inf")
+            for i in range(path_len):
+                d = math.hypot(self.path_x[i] - self.curr_x, self.path_y[i] - self.curr_y)
+                if d < best_d:
+                    best_d = d
+                    best_i = i
+            curr_idx = best_i
+            self.old_nearest_idx = curr_idx
             self.int_err = 0.0
             self._skip_dterm = 1
-            min_d = math.hypot(self.path_x[curr_idx] - self.curr_x, self.path_y[curr_idx] - self.curr_y)
-        else:
-            self.last_idx = curr_idx
+            min_d = best_d
 
-        # Step 2-2) Look-ahead target (circular)
+        # Step 2) lookahead
+        active_look_ahead = max(params["look_ahead"], self.current_vel_cmd * 0.6)
+
         target_idx = curr_idx
-        found = False
-        for k in range(1, num_pts):
-            idx = (curr_idx + k) % num_pts
+        for k in range(1, path_len + 1):
+            idx = (curr_idx + k) % path_len
             d = math.hypot(self.path_x[idx] - self.curr_x, self.path_y[idx] - self.curr_y)
-            if d >= params["look_ahead"]:
+            if d >= active_look_ahead:
                 target_idx = idx
-                found = True
                 break
-        if not found:
-            target_idx = (curr_idx + 5) % num_pts
 
         tx, ty = self.path_x[target_idx], self.path_y[target_idx]
-        desired_yaw = math.atan2(ty - self.curr_y, tx - self.curr_x)
-        yaw_err = desired_yaw - self.curr_yaw
-        while yaw_err > math.pi: yaw_err -= 2 * math.pi
-        while yaw_err < -math.pi: yaw_err += 2 * math.pi
 
-        # Step 2-3) PID (D-term skip 포함)
+        # Step 3) yaw error
+        desired_yaw = math.atan2(ty - self.curr_y, tx - self.curr_x)
+        yaw_err = normalize_angle(desired_yaw - self.curr_yaw)
+
+        # Step 3-1) vector CTE
+        path_dx = tx - self.path_x[curr_idx]
+        path_dy = ty - self.path_y[curr_idx]
+        if math.hypot(path_dx, path_dy) < 1e-6:
+            cte = 0.0
+        else:
+            car_dx = self.curr_x - self.path_x[curr_idx]
+            car_dy = self.curr_y - self.path_y[curr_idx]
+            cross = path_dx * car_dy - path_dy * car_dx
+            cte_sign = 1.0 if cross > 0 else -1.0
+            cte = min_d * cte_sign * params["k_cte"]
+
+        # Step 3-2) PID
         self.int_err = max(-1.0, min(1.0, self.int_err + yaw_err * dt))
         p = params["kp"] * yaw_err
         i_term = params["ki"] * self.int_err
+
         if self._skip_dterm > 0:
             d_term = 0.0
             self._skip_dterm -= 1
         else:
-            d_term = params["kd"] * (yaw_err - self.prev_err) / dt
+            d_term = params["kd"] * normalize_angle(yaw_err - self.prev_err) / dt
 
-        cte = min_d * params["k_cte"] * (-1 if yaw_err < 0 else 1)
-        raw_steer = p + i_term + d_term + cte
-        final_steer = max(-1.0, min(1.0, float(raw_steer)))
+        final_steer = max(-1.0, min(1.0, float(p + i_term + d_term + cte)))
         self.prev_err = yaw_err
 
-        # Step 3) 모드 전환 (히스테리시스)
+        # Step 4) 모드 전환
         self.avg_steer_signed = 0.85 * self.avg_steer_signed + 0.15 * final_steer
         filter_val = abs(self.avg_steer_signed)
 
+        next_mode = self.mode
         if abs(final_steer) > 0.90:
-            self.mode = "HARD"
+            next_mode = "HARD"
             self.avg_steer_signed = 0.7 if final_steer > 0 else -0.7
         else:
             if self.mode == "STRGT":
                 if filter_val > 0.30:
-                    self.mode = "EASY"
+                    next_mode = "EASY"
             elif self.mode == "EASY":
                 if filter_val < 0.15:
-                    self.mode = "STRGT"
+                    next_mode = "STRGT"
                 elif filter_val > 0.80:
-                    self.mode = "HARD"
+                    next_mode = "HARD"
             elif self.mode == "HARD":
                 if filter_val < 0.70:
-                    self.mode = "EASY"
+                    next_mode = "EASY"
 
-        # Step 4) 모드별 target_v
+        # Anti-windup on upshift
+        if (self.mode == "HARD" and next_mode == "EASY") or (self.mode == "EASY" and next_mode == "STRGT"):
+            self.int_err = 0.0
+
+        self.mode = next_mode
+
+        # Step 5) target_v
         if self.mode == "HARD":
             target_v = HARD_PARAMS["vel"]
         elif self.mode == "EASY":
@@ -308,7 +352,7 @@ class ZonePriorityDriver(Node):
         else:
             target_v = STRAIGHT_PARAMS["vel"]
 
-        # Step 5) 속도 램프(가속/감속 제한) + 최종 캡(0.75)
+        # Step 6) 속도 램프 + 최종 캡(TARGET_VELOCITY)
         if target_v > self.current_vel_cmd:
             self.current_vel_cmd = min(target_v, self.current_vel_cmd + ACCEL_LIMIT * dt)
         else:
@@ -321,9 +365,9 @@ class ZonePriorityDriver(Node):
         cmd.angular.z = float(final_steer)
         self.accel_raw_pub.publish(cmd)
 
+
 # ============================================================
-# Guardian + Mux (사지교차로 포함)  <<< 기존 로직 "그대로" 유지
-# - 단, 파일 경로만 PATH_DIR로 붙여 Docker/ROS pkg 대응
+# Guardian Mux for All Zones
 # ============================================================
 class AllZonesGuardianMux(Node):
     def __init__(self):
@@ -344,12 +388,12 @@ class AllZonesGuardianMux(Node):
         self.create_subscription(Accel, "/CAV_01_accel_raw", self.cb1_raw, 10)
         self.create_subscription(Accel, "/CAV_02_accel_raw", self.cb2_raw, 10)
 
-        # ---------- final accel publishers (ONLY THIS NODE publishes these) ----------
+        # ---------- final accel publishers ----------
         self.pub1 = self.create_publisher(Accel, "/CAV_01_accel", 10)
         self.pub2 = self.create_publisher(Accel, "/CAV_02_accel", 10)
 
         # ====================================================
-        # upper/right/rotary 파일들  (경로만 PATH_DIR 적용)
+        # upper/right/rotary 파일들
         # ====================================================
         self.DZ_RIGHT    = os.path.join(PATH_DIR, "right_1_2.csv")
         self.DZ_UPPER_V1 = os.path.join(PATH_DIR, "upper_dz_v1.csv")
@@ -369,7 +413,7 @@ class AllZonesGuardianMux(Node):
         self.path1_s = build_cumulative_s(self.path1_pts) if self.path1_pts else []
         self.path2_s = build_cumulative_s(self.path2_pts) if self.path2_pts else []
 
-        # upper merge point (두 경로에 동시에 가장 가까운 점)
+        # upper merge point
         upper_all = self.dz_upper_v1 + self.dz_upper_v2
         self.upper_merge = None
         self.s_merge_1 = None
@@ -405,44 +449,55 @@ class AllZonesGuardianMux(Node):
         self.MIN_SPEED = MINSPEED
         self.RESUME_PULSE_TICKS = int(1.5 / self.TICK)
 
-        self.cmd_speed = {1: 99.0, 2: 99.0}       # current limited speed
-        self.target_speed = {1: None, 2: None}    # desired limit or None(=no limit)
+        self.cmd_speed = {1: 99.0, 2: 99.0}
+        self.target_speed = {1: None, 2: None}
         self.resume_ticks_left = {1: 0, 2: 0}
         self.upper_lock_yield_id = None
 
-        # ====================================================
-        # ✅ 사지교차로
-        # ====================================================
-        self.CENTER = (-2.3351, 0.0)
+        # ==========================
+        # 스타일 FW 파라미터 (Task3 참고)
+        # ==========================
+        self.VEH_IDS = [1, 2]
+        self.FW_CENTER = (-2.3351, 0.0)
 
-        self.RADIUS = 1.6333
-        self.CORE_RADIUS = 1.0
-        self.EXIT_RADIUS = 0.6
+        self.FW_RADIUS = 2.2
+        self.FW_EXIT_RADIUS = 0.4
+        self.FW_HYSTERESIS_N = 10
+        self.FW_APPROACH_N = 2
+        self.FW_EPS = 0.001
 
-        self.V_NOM = TARGET_VELOCITY
-        self.D_SAFE = 3
-        self.D_CLEAR = 1.5
+        self.FW_V_NOM = TARGET_VELOCITY
 
-        self.HYSTERESIS_N = 5
+        # 우선순위별 목표 속도
+        self.FW_RANK_SPEEDS_2P = [TARGET_VELOCITY, 0.2]
 
+        # 2대 케이스
+        self.FW_CASES_12 = [
+            frozenset([(1, "N"), (2, "W")]), frozenset([(1, "N"), (2, "E")]),
+            frozenset([(1, "S"), (2, "W")]), frozenset([(1, "S"), (2, "E")]),
+        ]
+
+        self.fw = {
+            "active": {vid: False for vid in self.VEH_IDS},
+            "outside_ticks": {vid: 0 for vid in self.VEH_IDS},
+            "prev_dist": {vid: None for vid in self.VEH_IDS},
+            "approach_cnt": {vid: 0 for vid in self.VEH_IDS},
+            "approaching": {vid: False for vid in self.VEH_IDS},
+        }
+
+        # speed estimator (TTC ranking)
         self.last_pose = {1: None, 2: None}
-        self.current_speeds = {1: self.V_NOM, 2: self.V_NOM}
-        self.prev_dist_c = {1: 0.0, 2: 0.0}
-        self.leader_id = None
-        self.exit_counter = 0
-        self.intersection_lock = False
+        self.v_est = {1: TARGET_VELOCITY, 2: TARGET_VELOCITY}
 
         # ==========================
-        # ✅ 로그용 상태 저장
+        # 로그용 상태 저장
         # ==========================
         self._tick_count = 0
-        self._last_zone_state = {}   # zone -> tuple
-        self._last_pub_state = None  # (v1,v2,lim1,lim2)
-        self._last_leader = None
+        self._last_zone_state = {}
+        self._last_pub_state = None
 
-        # loop
         self.create_timer(self.TICK, self.tick)
-        self.get_logger().info("✅ GuardianMux started: raw->final accel (upper/right/rotary + intersection)")
+        self.get_logger().info("✅ GuardianMux started: raw->final accel (upper/right/rotary + FW intersection)")
 
     # ---------- callbacks ----------
     def cb1_pose(self, msg):
@@ -459,18 +514,17 @@ class AllZonesGuardianMux(Node):
     def cb2_raw(self, msg):
         self.raw2 = msg
 
-    # ---------- speed estimator (intersection uses this) ----------
+    # ---------- speed estimator ----------
     def _update_speed_est(self, vid, curr_p):
         if self.last_pose[vid] is not None:
             prev = self.last_pose[vid]
             dist = math.hypot(curr_p[0] - prev[0], curr_p[1] - prev[1])
-            v_est = dist / self.TICK
-            self.current_speeds[vid] = 0.3 * v_est + 0.7 * self.current_speeds[vid]
+            v = dist / self.TICK
+            self.v_est[vid] = 0.35 * v + 0.65 * self.v_est[vid]
         self.last_pose[vid] = curr_p
 
     # ---------- ramped limiter ----------
     def _apply_limit(self, vid, tgt):
-        # tgt: None => no limit (99)
         if tgt is None:
             self.cmd_speed[vid] = 99.0
             GUARDIAN_LIMITS[vid] = 99.0
@@ -478,7 +532,7 @@ class AllZonesGuardianMux(Node):
 
         cur = self.cmd_speed[vid]
         if cur > 50:
-            cur = self.V_NOM
+            cur = self.FW_V_NOM
         step = self.RAMP_PER_SEC * self.TICK
         if tgt > cur:
             cur = min(tgt, cur + step)
@@ -493,110 +547,128 @@ class AllZonesGuardianMux(Node):
         self.resume_ticks_left[vid] = self.RESUME_PULSE_TICKS
         self.target_speed[vid] = self.ACCEL_RESUME
 
-    def _cancel_resume(self, vid):
-        self.resume_ticks_left[vid] = 0
-
-    # ---------------------------
-    # ✅ 로그 중복 방지 함수
-    # ---------------------------
     def _log_zone(self, zone_name: str, state_tuple, text: str):
         prev = self._last_zone_state.get(zone_name)
         if prev != state_tuple:
             print(text)
             self._last_zone_state[zone_name] = state_tuple
 
-    # ============================================================
-    # ✅ intersection logic => returns (limit_v1, limit_v2) or (None,None)
-    # ============================================================
-    def _intersection_limits(self):
-        if self.p1 is None or self.p2 is None:
-            return (None, None)
+    # =====================================
+    # FW intersection helpers (Task 3 참고)
+    # =====================================
+    def _fw_dist(self, vid):
+        p = self.p1 if vid == 1 else self.p2
+        if not p:
+            return None
+        return math.hypot(p[0] - self.FW_CENTER[0], p[1] - self.FW_CENTER[1])
 
-        (x1, y1) = self.p1
-        (x2, y2) = self.p2
+    def _fw_get_direction(self, vid):
+        p = self.p1 if vid == 1 else self.p2
+        if not p:
+            return None
+        dx = p[0] - self.FW_CENTER[0]
+        dy = p[1] - self.FW_CENTER[1]
+        if abs(dx) > abs(dy):
+            return "E" if dx > 0 else "W"
+        else:
+            return "N" if dy > 0 else "S"
 
-        dist_c1 = math.hypot(x1 - self.CENTER[0], y1 - self.CENTER[1])
-        dist_c2 = math.hypot(x2 - self.CENTER[0], y2 - self.CENTER[1])
-        dist_between = math.hypot(x1 - x2, y1 - y2)
+    def _fw_update_flags(self):
+        for vid in self.VEH_IDS:
+            d = self._fw_dist(vid)
+            if d is None:
+                continue
 
-        target_v1 = self.V_NOM
-        target_v2 = self.V_NOM
+            # active hysteresis
+            if d < self.FW_RADIUS:
+                self.fw["active"][vid] = True
+                self.fw["outside_ticks"][vid] = 0
+            elif d > self.FW_EXIT_RADIUS:
+                if self.fw["active"][vid]:
+                    self.fw["outside_ticks"][vid] += 1
+                    if self.fw["outside_ticks"][vid] >= self.FW_HYSTERESIS_N:
+                        self.fw["active"][vid] = False
+                        self.fw["outside_ticks"][vid] = 0
 
-        # leader 선택
-        if self.leader_id is None and not self.intersection_lock:
-            if dist_c1 < self.RADIUS and dist_c2 < self.RADIUS:
-
-                if abs(dist_c1 - dist_c2) < self.RADIUS * 0.1:
-                    self.leader_id = 1
-                else:
-                    self.leader_id = 1 if dist_c1 < dist_c2 else 2
-                self.exit_counter = 0
-
-                # ✅ leader 바뀔 때 로그
-                if self._last_leader != self.leader_id:
-                    print(f"🏁 [INTERSECTION] priority 선정: CAV{self.leader_id} (dist_c1={dist_c1:.2f}, dist_c2={dist_c2:.2f})")
-                    self._last_leader = self.leader_id
-
-        if self.leader_id is not None:
-            d_l = dist_c1 if self.leader_id == 1 else dist_c2
-            prev_d_l = self.prev_dist_c[self.leader_id]
-
-            if d_l > prev_d_l and d_l > self.EXIT_RADIUS:
-                self.exit_counter += 1
+            # approaching 판단
+            prev = self.fw["prev_dist"][vid]
+            if prev is None:
+                self.fw["prev_dist"][vid] = d
+                self.fw["approach_cnt"][vid] = 0
+                self.fw["approaching"][vid] = False
             else:
-                self.exit_counter = 0
-
-            collision_active = (dist_c1 < self.RADIUS and dist_c2 < self.RADIUS and dist_between < self.D_CLEAR)
-            core_active = (dist_c1 < self.CORE_RADIUS and dist_c2 < self.CORE_RADIUS)
-            slow_active = collision_active or core_active
-
-            follower = 2 if self.leader_id == 1 else 1
-            if slow_active and self.exit_counter < self.HYSTERESIS_N:
-                ratio = max(0.2, min(1.0, dist_between / self.D_SAFE))
-                v_slow = self.V_NOM * ratio
-
-                if self.leader_id == 1:
-                    target_v2 = v_slow
+                if d < prev - self.FW_EPS:
+                    self.fw["approach_cnt"][vid] += 1
                 else:
-                    target_v1 = v_slow
+                    self.fw["approach_cnt"][vid] = 0
+                self.fw["approaching"][vid] = (self.fw["approach_cnt"][vid] >= self.FW_APPROACH_N)
+                self.fw["prev_dist"][vid] = d
 
-                # ✅ slow_active 상태 로그(변할 때만)
-                self._log_zone(
-                    "INTERSECTION",
-                    ("ACTIVE", self.leader_id, follower),
-                    f"🛑 [INTERSECTION ACTIVE] priority=CAV{self.leader_id} yield=CAV{follower} "
-                    f"dist_c1={dist_c1:.2f} dist_c2={dist_c2:.2f} d12={dist_between:.2f} v_slow={v_slow:.2f}"
-                )
-            else:
-                self._log_zone("INTERSECTION", ("IDLE", self.leader_id), f"✅ [INTERSECTION] idle (priority=CAV{self.leader_id})")
+    def _fw_compute_limits(self):
+        """2대 전용: 케이스 매칭되면 가까운 놈 우선, 뒤는 감속"""
+        self._fw_update_flags()
 
-            if self.exit_counter >= self.HYSTERESIS_N:
-                print("✅ [INTERSECTION] priority reset (exit confirmed)")
-                self.leader_id = None
-                self.exit_counter = 0
-                self._last_leader = None
-                self.intersection_lock = True
+        fw_eff = []
+        for vid in self.VEH_IDS:
+            if self.fw["active"][vid] and self.fw["approaching"][vid]:
+                fw_eff.append(vid)
 
-        self.prev_dist_c[1] = dist_c1
-        self.prev_dist_c[2] = dist_c2
-        if self.intersection_lock:
-            if dist_c1 > self.RADIUS and dist_c2 > self.RADIUS:
-                print("[INTERSECTION] reselsect lock released")
-                self.intersection_lock = False
+        lim = {1: None, 2: None}
+        if len(fw_eff) < 2:
+            self._log_zone("FW", ("IDLE", tuple(fw_eff)), f"✅ [FW] idle eff={fw_eff}")
+            return lim, fw_eff
 
-        lim1 = target_v1 if target_v1 < self.V_NOM else None
-        lim2 = target_v2 if target_v2 < self.V_NOM else None
-        return (lim1, lim2)
+        d1 = self._fw_get_direction(1)
+        d2 = self._fw_get_direction(2)
+        if (d1 is None) or (d2 is None):
+            return lim, fw_eff
+
+        pairs = frozenset([(1, d1), (2, d2)])
+        matched = None
+        for c in self.FW_CASES_12:
+            if c.issubset(pairs):
+                matched = c
+                break
+
+        if not matched:
+            self._log_zone("FW", ("IDLE_CASE", d1, d2), f"✅ [FW] no-case d1={d1} d2={d2}")
+            return lim, fw_eff
+
+        # priority: 더 가까운(=dist 작은) 차량
+        targs = [1, 2]
+        targs.sort(key=lambda v: self._fw_dist(v) if self._fw_dist(v) is not None else 1e9)
+
+        spd = self.FW_RANK_SPEEDS_2P
+        for i, vid in enumerate(targs):
+            des = spd[min(i, len(spd)-1)]
+            if des < self.FW_V_NOM:
+                lim[vid] = des
+
+        self._log_zone(
+            "FW",
+            ("ACTIVE", d1, d2, tuple(targs)),
+            f"🛑 [FW ACTIVE] d1={d1} d2={d2} priority=CAV{targs[0]} yield=CAV{targs[1]} lim={lim}"
+        )
+        return lim, fw_eff
+
+    def _infer_mode(self, steer):
+        s = abs(steer)
+        if s > 0.80:
+            return "HARD"
+        elif s > 0.30:
+            return "EASY"
+        else:
+            return "STRGT"
+
 
     # ============================================================
-    # main tick: compute all limits, choose min, publish final accel
+    # main tick
     # ============================================================
     def tick(self):
         if self.p1 is None or self.p2 is None:
             return
 
         self._tick_count += 1
-
         x1, y1 = self.p1
         x2, y2 = self.p2
         d12 = math.hypot(x1 - x2, y1 - y2)
@@ -622,7 +694,7 @@ class AllZonesGuardianMux(Node):
             else:
                 self._log_zone("RIGHT", ("IDLE",), "✅ [RIGHT] idle")
 
-        # ---------------- UPPER (split DZ, arc-length, toggle 방지) ----------------
+        # ---------------- UPPER ----------------
         if self.upper_merge and self.dz_upper_v1 and self.dz_upper_v2 and (self.s_merge_1 is not None) and (self.s_merge_2 is not None):
             n1 = (min_dist_to_points(x1, y1, self.dz_upper_v1) <= self.NEAR_TOL_UPPER)
             n2 = (min_dist_to_points(x2, y2, self.dz_upper_v2) <= self.NEAR_TOL_UPPER)
@@ -665,7 +737,7 @@ class AllZonesGuardianMux(Node):
             else:
                 self._log_zone("UPPER", ("IDLE",), "✅ [UPPER] idle")
 
-        # ---------------- ROTARY (in_rotary & in_zone => 2 감속) ----------------
+        # ---------------- ROTARY ----------------
         if self.dz_rotary_v1 and self.dz_zone_v2:
             in_rotary = (min_dist_to_points(x1, y1, self.dz_rotary_v1) <= self.NEAR_TOL_ROTARY)
             in_zone   = (min_dist_to_points(x2, y2, self.dz_zone_v2) <= self.NEAR_TOL_ROTARY)
@@ -675,14 +747,14 @@ class AllZonesGuardianMux(Node):
             else:
                 self._log_zone("ROTARY", ("IDLE",), "✅ [ROTARY] idle")
 
-        # ---------------- INTERSECTION (사지교차로) ----------------
-        lim1_i, lim2_i = self._intersection_limits()
-        if lim1_i is not None:
-            limit_candidates[1].append(lim1_i)
-        if lim2_i is not None:
-            limit_candidates[2].append(lim2_i)
+        # ---------------- FW INTERSECTION ----------------
+        fw_lim, fw_eff = self._fw_compute_limits()
+        if fw_lim.get(1) is not None:
+            limit_candidates[1].append(float(fw_lim[1]))
+        if fw_lim.get(2) is not None:
+            limit_candidates[2].append(float(fw_lim[2]))
 
-        # choose min-speed among candidates (ignore None)
+        # choose min-speed among candidates
         final_limits = {}
         for vid in (1, 2):
             vals = [v for v in limit_candidates[vid] if v is not None]
@@ -694,7 +766,7 @@ class AllZonesGuardianMux(Node):
         self._apply_limit(1, self.target_speed[1])
         self._apply_limit(2, self.target_speed[2])
 
-        # publish FINAL accel: take steering from raw, speed=min(raw_speed, guardian_limit)
+        # publish FINAL accel: steer from raw, speed=min(raw_speed, guardian_limit)
         v1 = min(float(self.raw1.linear.x), float(GUARDIAN_LIMITS[1]))
         v2 = min(float(self.raw2.linear.x), float(GUARDIAN_LIMITS[2]))
 
@@ -708,11 +780,21 @@ class AllZonesGuardianMux(Node):
         out2.angular.z = float(self.raw2.angular.z)
         self.pub2.publish(out2)
 
-        # 최종 속도/리밋 로그 (그대로)
-        state = (round(v1, 3), round(v2, 3), round(GUARDIAN_LIMITS[1], 3), round(GUARDIAN_LIMITS[2], 3))
-        if (self._tick_count % int(1.0 / self.TICK) == 0) or (self._last_pub_state != state):
-            print(f"[FINAL] out_v1={v1:.3f} out_v2={v2:.3f} | limit1={GUARDIAN_LIMITS[1]:.3f} limit2={GUARDIAN_LIMITS[2]:.3f}")
-            self._last_pub_state = state
+        # ---------- 로그 출력 ----------
+        if self._tick_count % int(1.0 / self.TICK) == 0:
+            mode1 = self._infer_mode(self.raw1.angular.z)
+            mode2 = self._infer_mode(self.raw2.angular.z)
+
+            print(
+                f"CAV 01 : {mode1:<6} | {v1:>5.2f} m/s | steer {self.raw1.angular.z:>6.3f} | "
+                f"pose ({self.p1[0]:>6.2f}, {self.p1[1]:>6.2f})"
+            )
+            print(
+                f"CAV 02 : {mode2:<6} | {v2:>5.2f} m/s | steer {self.raw2.angular.z:>6.3f} | "
+                f"pose ({self.p2[0]:>6.2f}, {self.p2[1]:>6.2f})"
+            )
+            print("-" * 72)
+
 
 # ============================================================
 # main
