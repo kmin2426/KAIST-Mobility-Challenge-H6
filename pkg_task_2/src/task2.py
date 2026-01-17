@@ -9,7 +9,7 @@ import numpy as np
 import os
 
 class MergeCorridorController(Node):
-    # --- Tuning Constants ---
+    # Tuning Constants
     MERGE_ZONE = {'x_min': 3.50, 'x_max': 5.31, 'y_min': -2.66, 'y_max': 0.77}
     CUSTOM_ZONE = {'x_min': 4.0, 'x_max': 6.0, 'y_min': -1.35, 'y_max': 0.77}
     
