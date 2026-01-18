@@ -22,9 +22,22 @@ This project is built on the official KAIST Mobility Challenge Simulator.
 
 ## How to Run
 ### 0. Prerequisites
-Docker installed
-Linux (Ubuntu 20.04 recommended)
-X11 available (for simulator GUI)
+- Docker installed
+- Linux (Ubuntu 20.04 recommended)
+- X11 available (for simulator GUI)
+
+**Extract**
+```bash
+tar -xzf TEAM_H6.tar.gz
+cd TEAM_H6
+```
+
+**Build Docker Image**
+```bash
+docker build -t h6 .
+```
+
+<br><br>
 
 ### 1. Run Simulator (GUI)
 - **task1-1**: L+1
@@ -47,6 +60,8 @@ docker run --rm -it \
   --device /dev/dri \
   h6
 ```
+
+<br><br>
 
 ### 2. Run Algorithms (in a Separate Terminal)
 **Problem 1-1**
