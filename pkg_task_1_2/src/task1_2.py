@@ -460,16 +460,16 @@ class AllZonesGuardianMux(Node):
         self.VEH_IDS = [1, 2]
         self.FW_CENTER = (-2.3351, 0.0)
 
-        self.FW_RADIUS = 2.2
-        self.FW_EXIT_RADIUS = 0.4
-        self.FW_HYSTERESIS_N = 10
+        self.FW_RADIUS = 2.35
+        self.FW_EXIT_RADIUS = 1.1
+        self.FW_HYSTERESIS_N = 5
         self.FW_APPROACH_N = 2
         self.FW_EPS = 0.001
 
         self.FW_V_NOM = TARGET_VELOCITY
 
         # 우선순위별 목표 속도
-        self.FW_RANK_SPEEDS_2P = [TARGET_VELOCITY, 0.2]
+        self.FW_RANK_SPEEDS_2P = [TARGET_VELOCITY, 0.15]
 
         # 2대 케이스
         self.FW_CASES_12 = [
