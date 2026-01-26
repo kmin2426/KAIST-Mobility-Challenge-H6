@@ -89,7 +89,7 @@ SLOW_PARAMS = {
 # 1. Hard Curve (Low Speed, High Gain)
 HARD_PARAMS = {
     "vel": 0.5,
-    "look_ahead": 0.55,
+    "look_ahead": 0.45,
     "kp": 6.0,
     "ki": 0.055,
     "kd": 1.0,
@@ -99,7 +99,7 @@ HARD_PARAMS = {
 # 2. Easy Curve (Medium Speed)
 EASY_PARAMS = {
     "vel": 0.75,
-    "look_ahead": 0.65, 
+    "look_ahead": 0.55, 
     "kp": 4.5,
     "ki": 0.06,
     "kd": 1.0,
@@ -107,14 +107,24 @@ EASY_PARAMS = {
 }
 
 # 3. Straight (High Speed, Stability Focused)
+# STRAIGHT_PARAMS = {
+#     "vel": 0.9,
+#     "look_ahead": 1.0,  # Increased for high speed
+#     "kp": 2.5,          # Reduced to prevent oscillation
+#     "ki": 0.03,        # Minimize integral windup
+#     "kd": 2.5,          # Increased damping
+#     "k_cte": 1.0
+# }
+
 STRAIGHT_PARAMS = {
-    "vel": 0.9,
-    "look_ahead": 1.0,  # Increased for high speed
-    "kp": 2.5,          # Reduced to prevent oscillation
-    "ki": 0.03,        # Minimize integral windup
-    "kd": 2.5,          # Increased damping
-    "k_cte": 1.0
+    "vel": 0.85,        # 0.9 -> 0.85 (일단 안정화)
+    "look_ahead": 1.0,  # 살짝 늘려서 직진성 강화
+    "kp": 2.0,
+    "ki": 0.00,         # 직진에서 I는 일단 꺼
+    "kd": 0.8,          # 2.5 -> 0.8 (핵심)
+    "k_cte": 0.6        # CTE도 약하게
 }
+
 
 # Vehicle Specs
 WHEELBASE = 0.211
@@ -335,18 +345,54 @@ class MapPredictionDriver(Node):
         self.yaw_err_f = self.normalize_angle(self.yaw_err_f + alpha * err_delta)
 
 
-        # Calculate Cross Track Error (CTE)
-        path_dx = tx - self.path_x[curr_idx]
-        path_dy = ty - self.path_y[curr_idx]
+        # # Calculate Cross Track Error (CTE)
+        # path_dx = tx - self.path_x[curr_idx]
+        # path_dy = ty - self.path_y[curr_idx]
         
-        if math.hypot(path_dx, path_dy) < 0.001:
+        # if math.hypot(path_dx, path_dy) < 0.001:
+        #     cte = 0.0
+        # else:
+        #     car_dx = self.curr_x - self.path_x[curr_idx]
+        #     car_dy = self.curr_y - self.path_y[curr_idx]
+        #     cross_prod = path_dx * car_dy - path_dy * car_dx
+        #     cte_sign = 1.0 if cross_prod > 0 else -1.0
+        #     cte = min_d * cte_sign * params["k_cte"]
+
+
+        # Calculate Cross Track Error (CTE) - tangent based (stable sign)
+        path_len = len(self.path_pts)
+        next_idx = (curr_idx + 1) % path_len
+
+        px, py = self.path_x[curr_idx], self.path_y[curr_idx]
+        nx, ny = self.path_x[next_idx], self.path_y[next_idx]
+
+        # Tangent vector of path at curr_idx
+        t_x = nx - px
+        t_y = ny - py
+        t_norm = math.hypot(t_x, t_y)
+
+        if t_norm < 1e-6:
             cte = 0.0
         else:
-            car_dx = self.curr_x - self.path_x[curr_idx]
-            car_dy = self.curr_y - self.path_y[curr_idx]
-            cross_prod = path_dx * car_dy - path_dy * car_dx
-            cte_sign = 1.0 if cross_prod > 0 else -1.0
-            cte = min_d * cte_sign * params["k_cte"]
+            # Vector from path point to car
+            c_x = self.curr_x - px
+            c_y = self.curr_y - py
+
+            # signed distance from path (left/right)
+            signed_cte = (t_x * c_y - t_y * c_x) / t_norm
+
+            # clamp to suppress spikes from localization jitter
+            signed_cte = max(-0.6, min(0.6, signed_cte))
+
+            cte = signed_cte * params["k_cte"]
+
+            # ✅ 직진(STRATGT)에서만 CTE kill
+            if self.mode == "STRAIGHT":
+                cte = 0.0
+
+
+
+
 
         # PID Calculation
         self.int_err = max(-1.0, min(1.0, self.int_err + yaw_err * dt))
@@ -388,17 +434,17 @@ class MapPredictionDriver(Node):
                 next_mode = "HARD"
                 self.avg_steer_signed = 0.7 if final_steer > 0 else -0.7
             else:
-                if self.mode == "STRGT":
+                if self.mode == "STRAIGHT":
                     if filter_val > 0.30: next_mode = "EASY"
                 elif self.mode == "EASY":
-                    if filter_val < 0.15: next_mode = "STRGT"
+                    if filter_val < 0.15: next_mode = "STRAIGHT"
                     elif filter_val > 0.80: next_mode = "HARD"
                 elif self.mode == "HARD":
                     if filter_val < 0.70: next_mode = "EASY"
             
             # Anti-Windup on mode transition
             if (self.mode == "HARD" and next_mode == "EASY") or \
-               (self.mode == "EASY" and next_mode == "STRGT"):
+               (self.mode == "EASY" and next_mode == "STRAIGHT"):
                 self.int_err = 0.0
 
             self.mode = next_mode
