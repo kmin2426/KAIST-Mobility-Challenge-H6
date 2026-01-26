@@ -152,7 +152,7 @@ ros2 run kmc_hardware_driver_node kmc_hardware_driver_read_allstate_node \
 
 ```bash
 ros2 run kmc_hardware_driver_node kmc_hardware_driver_read_allstate_node \
-  --ros-args -p port:=/dev/ttyUSB0 -r cmd_vel:=/CAV_09/cmd_vel
+  --ros-args -p port:=/dev/ttyUSB0 -r cmd_vel:=/CAV_28/cmd_vel
 ```
 
 ---
@@ -164,7 +164,7 @@ ros2 run kmc_hardware_driver_node kmc_hardware_driver_read_allstate_node \
 ```bash
 export ROS_DOMAIN_ID=100
 source /opt/ros/foxy/setup.bash
-ros2 topic pub --once /CAV_09/cmd_vel geometry_msgs/msg/Twist \
+ros2 topic pub --once /CAV_28/cmd_vel geometry_msgs/msg/Twist \
 "{linear: {x: 0.0}, angular: {z: 0.0}}"
 ```
 
@@ -173,7 +173,7 @@ ros2 topic pub --once /CAV_09/cmd_vel geometry_msgs/msg/Twist \
 ```bash
 export ROS_DOMAIN_ID=100 
 source /opt/ros/foxy/setup.bash 
-python3 fakepose.py --cav 9 --path ./path/path3_2.json --rate 50 --loop --use_cmd_vel --speed 1.0
+python3 fakepose.py --cav 28 --path ./path/path3_2.json --rate 50 --loop --use_cmd_vel --speed 0.7
 ```
 
 ### 3-3. 고속 제어: 단일 실행
@@ -186,5 +186,13 @@ ros2 run kmc_hardware_driver_node kmc_hardware_high_rate_control_node \
   -p control_rate_hz:=1000.0 \
   -p vehicle_speed_rate_hz:=100.0 \
   -p command_refresh_hz:=50.0 \
-  -r cmd_vel:=/CAV_09/cmd_vel
+  -r cmd_vel:=/CAV_28/cmd_vel
+```
+
+### 3-4. [task3.py](http://task3.py) 실행
+
+```bash
+export ROS_DOMAIN_ID=100 
+source /opt/ros/foxy/setup.bash 
+python3 task3.py
 ```
