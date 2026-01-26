@@ -86,38 +86,27 @@ SLOW_PARAMS = {
 # [2] Speed Profiles (3-Stage Transmission)
 # ============================================================
 
-# 1. Hard Curve (Low Speed, High Gain)
 HARD_PARAMS = {
     "vel": 0.5,
-    "look_ahead": 0.45,
-    "kp": 6.0,
+    "look_ahead": 0.55,
+    "kp": 5.2,
     "ki": 0.055,
-    "kd": 1.0,
-    "k_cte": 5.0
+    "kd": 1.4,
+    "k_cte": 2.2
 }
 
-# 2. Easy Curve (Medium Speed)
 EASY_PARAMS = {
     "vel": 0.75,
-    "look_ahead": 0.55, 
-    "kp": 4.5,
+    "look_ahead": 0.70,
+    "kp": 4.2,
     "ki": 0.06,
-    "kd": 1.0,
-    "k_cte": 4.0
+    "kd": 1.3,
+    "k_cte": 2.0
 }
 
-# 3. Straight (High Speed, Stability Focused)
-# STRAIGHT_PARAMS = {
-#     "vel": 0.9,
-#     "look_ahead": 1.0,  # Increased for high speed
-#     "kp": 2.5,          # Reduced to prevent oscillation
-#     "ki": 0.03,        # Minimize integral windup
-#     "kd": 2.5,          # Increased damping
-#     "k_cte": 1.0
-# }
 
 STRAIGHT_PARAMS = {
-    "vel": 0.85,        # 0.9 -> 0.85 (일단 안정화)
+    "vel": 0.9,        # 0.9 -> 0.85 (일단 안정화)
     "look_ahead": 1.0,  # 살짝 늘려서 직진성 강화
     "kp": 2.0,
     "ki": 0.00,         # 직진에서 I는 일단 꺼
@@ -382,7 +371,9 @@ class MapPredictionDriver(Node):
             signed_cte = (t_x * c_y - t_y * c_x) / t_norm
 
             # clamp to suppress spikes from localization jitter
-            signed_cte = max(-0.6, min(0.6, signed_cte))
+            cte_clip = 0.25 if self.mode in ["HARD","EASY"] else 0.6
+            signed_cte = max(-cte_clip, min(cte_clip, signed_cte))
+
 
             cte = signed_cte * params["k_cte"]
 
@@ -430,9 +421,10 @@ class MapPredictionDriver(Node):
             filter_val = abs(self.avg_steer_signed)
 
             next_mode = self.mode 
-            if abs(final_steer) > 0.90:
+            if abs(final_steer) > 0.98:
                 next_mode = "HARD"
-                self.avg_steer_signed = 0.7 if final_steer > 0 else -0.7
+                # self.avg_steer_signed 강제 주입 삭제
+
             else:
                 if self.mode == "STRAIGHT":
                     if filter_val > 0.30: next_mode = "EASY"
@@ -1023,3 +1015,4 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
+
