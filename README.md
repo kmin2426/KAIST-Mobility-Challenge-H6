@@ -116,6 +116,19 @@ docker run --rm -it \
   h6
 ```
 
+**Topic List**
+```bash
+docker run --rm -it \
+  --net=host \
+  --ipc=host \
+  -e RUN_MODE=algorithm \
+  -e PROBLEM_ID=4 \
+  -e ROS_DOMAIN_ID=100 \
+  -e ROS_LOCALHOST_ONLY=0 \
+  -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
+  h6
+```
+
 ---
 
 ## Architecture
