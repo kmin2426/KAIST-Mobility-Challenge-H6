@@ -531,15 +531,36 @@ class Problem3DualZoneGuardianMux(Node):
             d = math.hypot(p[0]-prev[0], p[1]-prev[1]); v = d/self.TICK; self.v_est[vid] = 0.35*v + 0.65*self.v_est[vid]
         self.last_pose[vid] = p
 
-    def _apply_limit_ramp(self, vid, tgt, force_immediate=False):
-        if tgt is None: self.cmd_limit[vid] = 99.0; return
-        if force_immediate: self.cmd_limit[vid] = max(self.MIN_SPEED, float(tgt)); return
-        cur = self.cmd_limit[vid]
-        if cur > 50: cur = float(self.raw[vid].linear.x) if self.raw[vid] is not None else self.V_NOM
-        step_down = self.RAMP_DOWN_PER_SEC * self.TICK; step_up = self.RAMP_UP_PER_SEC * self.TICK
-        if tgt > cur: cur = min(tgt, cur + step_up)
-        else: cur = max(tgt, cur - step_down)
+    def _apply_limit_ramp(self, vid, tgt, force_immediate=False, release_to=99.0):
+        # tgt: 제한값(예: 0.1, 0.5 ...) 또는 None(제한 해제)
+        # release_to: None 해제 시 어디까지 풀어줄지 (99 or V_NOM)
+
+        if force_immediate:
+            # HV 같은 강제 상황은 즉시
+            if tgt is None:
+                self.cmd_limit[vid] = float(release_to)
+            else:
+                self.cmd_limit[vid] = max(self.MIN_SPEED, float(tgt))
+            return
+
+        cur = float(self.cmd_limit[vid])
+
+        # 초기값(99)일 때는 현재 raw 속도에서 시작하게
+        if cur > 50.0:
+            cur = float(self.raw[vid].linear.x) if self.raw[vid] is not None else self.V_NOM
+
+        step_down = self.RAMP_DOWN_PER_SEC * self.TICK
+        step_up   = self.RAMP_UP_PER_SEC   * self.TICK
+
+        tgt2 = float(release_to) if tgt is None else float(tgt)
+
+        if tgt2 > cur:
+            cur = min(tgt2, cur + step_up)
+        else:
+            cur = max(tgt2, cur - step_down)
+
         self.cmd_limit[vid] = max(self.MIN_SPEED, float(cur))
+
 
     def _rank_by_ttc(self, zone_name, vids):
         z = self.zones[zone_name]; c = z["CENTER"]; scored = []
@@ -800,16 +821,7 @@ class Problem3DualZoneGuardianMux(Node):
             if hv_lim.get(vid) is not None: cands.append(float(hv_lim[vid]))
             self.tgt_limit[vid] = min(cands) if cands else None
             
-            # =========================================================
-            # ✅ [NEW] 1순위가 된 경우 hold 즉시 해제
-            # =========================================================
-            # 조건:
-            # - 이번 tick에서 제한이 필요 없어졌고 (tgt_limit == None)
-            # - 직전에는 hold가 걸려 있었던 경우
-            if (not hv_force[vid]) and self.tgt_limit[vid] is None and self.hold_cnt[vid] > 0:
-                self.hold_cnt[vid] = 0
-                self.hold_limit[vid] = None
-            
+           
             # =========================
             # ✅ HOLD 적용 (깜빡임 방지)
             # =========================
@@ -831,7 +843,18 @@ class Problem3DualZoneGuardianMux(Node):
                         self.hold_cnt[vid] -= 1
                     else:
                         self.hold_limit[vid] = None
-            self._apply_limit_ramp(vid, self.tgt_limit[vid], force_immediate=hv_force[vid])
+            # ✅ release_to 정책
+            if in_round.get(vid, False):
+                release_to = 99.0      # 회전교차로: 완전 해제
+            else:
+                release_to = self.V_NOM  # 사지/합류점: V_NOM까지만 해제
+
+            self._apply_limit_ramp(
+                vid,
+                self.tgt_limit[vid],
+                force_immediate=hv_force[vid],
+                release_to=release_to
+            )
 
         # 4. Publish Commands
         for vid in self.VEH_IDS:
