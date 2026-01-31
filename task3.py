@@ -78,8 +78,8 @@ STRAIGHT_PARAMS = {
 WHEELBASE = 0.211
 DIST_CENTER_TO_REAR = WHEELBASE / 2.0
 TICK_RATE = 0.05
-ACCEL_LIMIT = 1.5
-DECEL_LIMIT = 3.0
+ACCEL_LIMIT = 0.8
+DECEL_LIMIT = 1.5
 
 
 # ============================================================
@@ -355,8 +355,8 @@ class Problem3DualZoneGuardianMux(Node):
 
         # Parameters
         self.V_NOM = 0.9
-        self.RANK_SPEEDS_3P = [0.9, 0.5, 0.1, 0.1]
-        self.RANK_SPEEDS_2P = [0.9, 0.1]
+        self.RANK_SPEEDS_3P = [0.9, 0.6, 0.3, 0.3]
+        self.RANK_SPEEDS_2P = [0.9, 0.3]
 
         self.TOP_CENTER = (-2.3342, 2.3073)
         self.BOT_CENTER = (-2.3342, -2.3073)
@@ -367,15 +367,15 @@ class Problem3DualZoneGuardianMux(Node):
         self.HYSTERESIS_N = 5
 
         self.TICK = 0.05
-        self.RAMP_DOWN_PER_SEC = 3.0
-        self.RAMP_UP_PER_SEC = 0.10
+        self.RAMP_DOWN_PER_SEC = 1.5
+        self.RAMP_UP_PER_SEC = 0.3
         self.STOP_VELOCITY = 0.0
         self.MIN_SPEED = self.STOP_VELOCITY
         
         # =========================
         # HOLD (감속 유지) 설정
         # =========================
-        self.HOLD_TICKS = 12  # 12 * 0.05s = 0.6초 정도 유지 (원하는대로)
+        self.HOLD_TICKS = 3  # 12 * 0.05s = 0.6초 정도 유지 (원하는대로)
         self.hold_cnt = {vid: 0 for vid in self.VEH_IDS}
         self.hold_limit = {vid: None for vid in self.VEH_IDS}  # 마지막으로 걸린 제한값 저장
 
@@ -412,8 +412,8 @@ class Problem3DualZoneGuardianMux(Node):
         self.FW_APPROACH_N = 2
         self.FW_EPS = 0.001
         self.FW_V_NOM = 0.9
-        self.FW_RANK_SPEEDS_2P = [0.9, 0.1]
-        self.FW_RANK_SPEEDS_3P = [0.9, 0.5, 0.1, 0.1]
+        self.FW_RANK_SPEEDS_2P = [0.9, 0.3]
+        self.FW_RANK_SPEEDS_3P = [0.9, 0.6, 0.3, 0.1]
         self.fw = {
             "active": {vid: False for vid in self.VEH_IDS},
             "outside_ticks": {vid: 0 for vid in self.VEH_IDS},
