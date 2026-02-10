@@ -4,12 +4,15 @@ This repository contains our team’s solution for the **KAIST Mobility Challeng
 focusing on **connected and autonomous vehicle (CAV) control** in a multi-agent
 ROS 2 simulation environment.
 
----
+<p align="center">
+  <img src="assets/kmc2025.png" width="90%">
+</p>
 
+---
 ## Overview
 - **Event**: KAIST Mobility Challenge  
 - **Platform**: ROS 2–based multi-vehicle simulator  
-- **Focus**: Trajectory tracking and motion control for CAVs  
+- **Focus**: Multi-CAV non-collision control algorithms for unsignalized intersections and roundabouts
 
 ---
 
