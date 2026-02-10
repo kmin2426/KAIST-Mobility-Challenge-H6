@@ -19,12 +19,7 @@ UART reception → motor and steering actuation
 - CAV02 Jetson: `ROS_DOMAIN_ID=100`
 - CAV03 Jetson: `ROS_DOMAIN_ID=100`
 - CAV04 Jetson: `ROS_DOMAIN_ID=100`
----
-## Embedded Demonstration Video
 
-[https://github.com/kmin2426/KAIST-Mobility-Challenge-H6/testbed/embedded.mov
-](https://github.com/kmin2426/KAIST-Mobility-Challenge-H6/blob/main/testbed/embedded.mov
-)
 ---
 
 ## 1. Initial Vehicle Setup
