@@ -22,7 +22,7 @@ UART reception → motor and steering actuation
 ---
 ## Embedded Demonstration Video
 
-https://github.com/kmin2426/KAIST-Mobility-Challenge-H6/main/testbed/embedded.mov
+https://github.com/kmin2426/KAIST-Mobility-Challenge-H6/testbed/embedded.mov
 
 ---
 
