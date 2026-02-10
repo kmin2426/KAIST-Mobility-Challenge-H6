@@ -1,3 +1,13 @@
+## Embedded Demonstration
+
+<p align="center">
+  <img src="embedded.jpg" width="85%">
+</p>
+
+<p align="center">
+  <em>Embedded testbed run (Task 3)</em>
+</p>
+
 ## 0. Architecture
 
 ```
