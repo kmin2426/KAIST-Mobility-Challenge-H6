@@ -124,9 +124,9 @@ Serial Port Check
 ```bash
 ls -l /dev/ttyKMC /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
 ```
-- ttySUB0 또는 ttyUSB1
+- ttyUSB0 or ttyUSB1
 
-**RUn Driver Node**
+**Run Driver Node**
 
 ```bash
 ros2 run kmc_hardware_driver_node kmc_hardware_driver_read_allstate_node \
